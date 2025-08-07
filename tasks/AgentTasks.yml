@@ -1,0 +1,325 @@
+# Agent System Task Management
+# Integration between agents and infrastructure
+
+version: '3'
+
+vars:
+  AGENT_WORKSPACE: '{{default "." .AGENT_WORKSPACE}}'
+  CLAUDE_API_KEY: '{{.CLAUDE_API_KEY}}'
+
+tasks:
+  # 🤖 Agent System Management
+  ready:
+    desc: "Prepare agent system for orchestration"
+    cmds:
+      - echo "🤖 Preparing agent system..."
+      - task: check-onboarding
+      - task: validate-context
+      - task: initialize-agents
+      - echo "✅ Agent system ready"
+
+  check-onboarding:
+    internal: true
+    cmds:
+      - |
+        if [ ! -f "PROJECT_MANIFESTO.md" ]; then
+          echo "📋 Repository not onboarded. Running onboarding..."
+          if [ -f "scripts/repo-onboarding.sh" ]; then
+            bash scripts/repo-onboarding.sh . || echo "⚠️  Onboarding script not found or failed"
+          else
+            echo "⚠️  Onboarding script not found at scripts/repo-onboarding.sh"
+          fi
+        else
+          echo "✅ Repository already onboarded"
+        fi
+
+  validate-context:
+    internal: true
+    cmds:
+      - |
+        echo "🔍 Validating agent context..."
+        MISSING=""
+        
+        # Check essential files
+        [ ! -f "PROJECT_MANIFESTO.md" ] && MISSING="$MISSING PROJECT_MANIFESTO.md"
+        [ ! -f "PROJECT_LOG.md" ] && MISSING="$MISSING PROJECT_LOG.md"
+        [ ! -d "TASKS" ] && MISSING="$MISSING TASKS/"
+        
+        if [ -n "$MISSING" ]; then
+          echo "⚠️  Missing agent context files:$MISSING"
+          echo "   Run repo onboarding to generate these files"
+        else
+          echo "✅ Agent context validated"
+        fi
+
+  initialize-agents:
+    internal: true
+    cmds:
+      - |
+        echo "🚀 Initializing agent system..."
+        
+        # Create agent workspace if needed
+        mkdir -p {{.AGENT_WORKSPACE}}/.claude-agents
+        
+        # Initialize agent CLI if available
+        if command -v claude-agents >/dev/null 2>&1; then
+          echo "✅ Claude Agents CLI ready"
+        else
+          echo "⚠️  Claude Agents CLI not found. Install with:"
+          echo "   npm install -g @claude/agents"
+        fi
+
+  # 🎯 Agent Spawning
+  spawn:
+    desc: "Spawn specific agent"
+    cmds:
+      - |
+        AGENT_NAME="{{.CLI_ARGS}}"
+        if [ -z "$AGENT_NAME" ]; then
+          echo "❌ Please specify an agent name"
+          echo "Usage: task agents:spawn -- <agent-name>"
+          exit 1
+        fi
+        
+        echo "🚀 Spawning agent: $AGENT_NAME"
+        
+        if command -v claude-agents >/dev/null 2>&1; then
+          claude-agents spawn "$AGENT_NAME" --workspace={{.AGENT_WORKSPACE}}
+        else
+          echo "⚠️  Using fallback Claude Code CLI"
+          claude --agent="$AGENT_NAME" --workspace={{.AGENT_WORKSPACE}}
+        fi
+
+  interactive:
+    desc: "Launch interactive agent interface"
+    cmds:
+      - |
+        echo "🤖 Launching interactive agent interface..."
+        
+        if command -v claude-agents >/dev/null 2>&1; then
+          claude-agents interactive --workspace={{.AGENT_WORKSPACE}}
+        else
+          echo "⚠️  Claude Agents CLI not found"
+          echo "   Using basic Claude Code CLI"
+          claude --interactive --workspace={{.AGENT_WORKSPACE}}
+        fi
+
+  sequence:
+    desc: "Run agent sequence"
+    cmds:
+      - |
+        SEQUENCE_NAME="{{.CLI_ARGS}}"
+        if [ -z "$SEQUENCE_NAME" ]; then
+          echo "❌ Please specify a sequence name"
+          echo "Usage: task agents:sequence -- <sequence-name>"
+          exit 1
+        fi
+        
+        echo "🎯 Running agent sequence: $SEQUENCE_NAME"
+        
+        if command -v claude-agents >/dev/null 2>&1; then
+          claude-agents sequence run "$SEQUENCE_NAME" --workspace={{.AGENT_WORKSPACE}}
+        else
+          echo "⚠️  Claude Agents CLI not found"
+          echo "   Cannot run sequences without the CLI"
+          exit 1
+        fi
+
+  # 📊 Agent Status and Health
+  status:
+    desc: "Show agent system status"
+    cmds:
+      - echo "📊 Agent System Status"
+      - echo "===================="
+      - task: list-active
+      - echo ""
+      - task: health
+
+  list-active:
+    desc: "List active agents"
+    cmds:
+      - |
+        echo "🔄 Active Agents:"
+        if command -v claude-agents >/dev/null 2>&1; then
+          claude-agents list --active
+        else
+          echo "   No active agents (CLI not available)"
+        fi
+
+  health:
+    desc: "Check agent system health"
+    cmds:
+      - |
+        echo "🏥 Agent System Health:"
+        ISSUES=""
+        
+        # Check API key
+        if [ -z "${CLAUDE_API_KEY}" ]; then
+          ISSUES="$ISSUES missing-api-key"
+          echo "   ❌ Claude API key not set"
+        else
+          echo "   ✅ Claude API key configured"
+        fi
+        
+        # Check workspace
+        if [ ! -d "{{.AGENT_WORKSPACE}}" ]; then
+          ISSUES="$ISSUES missing-workspace"
+          echo "   ❌ Agent workspace not found: {{.AGENT_WORKSPACE}}"
+        else
+          echo "   ✅ Agent workspace ready"
+        fi
+        
+        # Check project files
+        if [ ! -f "PROJECT_MANIFESTO.md" ]; then
+          ISSUES="$ISSUES missing-manifesto"
+          echo "   ⚠️  PROJECT_MANIFESTO.md missing (run onboarding)"
+        else
+          echo "   ✅ Project manifesto found"
+        fi
+        
+        if [ -z "$ISSUES" ]; then
+          echo "   🎉 All systems healthy!"
+        else
+          echo "   ⚠️  Issues detected: $ISSUES"
+        fi
+
+  # 🔄 Agent Lifecycle Management
+  stop-all:
+    desc: "Stop all running agents"
+    cmds:
+      - |
+        echo "🛑 Stopping all agents..."
+        if command -v claude-agents >/dev/null 2>&1; then
+          claude-agents stop --all
+        else
+          echo "⚠️  Cannot stop agents without Claude Agents CLI"
+        fi
+
+  restart:
+    desc: "Restart agent system"
+    cmds:
+      - task: stop-all
+      - task: ready
+      - echo "🔄 Agent system restarted"
+
+  # 🧹 Cleanup
+  clean:
+    desc: "Clean agent workspace"
+    cmds:
+      - |
+        echo "🧹 Cleaning agent workspace..."
+        if [ -d "{{.AGENT_WORKSPACE}}/.claude-agents" ]; then
+          rm -rf {{.AGENT_WORKSPACE}}/.claude-agents/cache
+          rm -rf {{.AGENT_WORKSPACE}}/.claude-agents/logs
+          echo "✅ Agent cache and logs cleared"
+        else
+          echo "⚠️  Agent workspace not found"
+        fi
+
+  # 🎓 Agent Development and Testing
+  validate:
+    desc: "Validate agent configurations"
+    cmds:
+      - |
+        echo "✅ Validating agent configurations..."
+        
+        # Check agent definitions
+        if [ -f "src/cli/src/agents/AgentManager.ts" ]; then
+          echo "   ✅ Agent manager found"
+        else
+          echo "   ⚠️  Agent manager not found"
+        fi
+        
+        # Validate manifesto
+        if [ -f "PROJECT_MANIFESTO.md" ]; then
+          echo "   ✅ Project manifesto validated"
+        else
+          echo "   ❌ Project manifesto missing"
+        fi
+
+  install:
+    desc: "Install agent dependencies"
+    cmds:
+      - |
+        echo "📦 Installing agent dependencies..."
+        
+        # Install Claude CLI if not present
+        if ! command -v claude >/dev/null 2>&1; then
+          echo "📥 Installing Claude CLI..."
+          npm install -g @anthropic/claude-cli || echo "⚠️  Failed to install Claude CLI"
+        fi
+        
+        # Install custom agent CLI if available
+        if [ -f "src/cli/package.json" ]; then
+          echo "📦 Installing custom agent CLI..."
+          cd src/cli && npm install && npm run build
+        fi
+
+  update:
+    desc: "Update agent system"
+    cmds:
+      - |
+        echo "⬆️  Updating agent system..."
+        
+        # Update Claude CLI
+        if command -v claude >/dev/null 2>&1; then
+          npm update -g @anthropic/claude-cli || echo "⚠️  Failed to update Claude CLI"
+        fi
+        
+        # Update custom agents
+        if [ -f "src/cli/package.json" ]; then
+          cd src/cli && npm update && npm run build
+        fi
+
+  # 📈 Agent Metrics
+  metrics:
+    desc: "Show agent system metrics"
+    cmds:
+      - |
+        echo "📈 Agent System Metrics:"
+        echo "======================="
+        
+        # Task completion metrics
+        if [ -f "TASKS/METRICS.json" ]; then
+          echo "📊 Task Metrics:"
+          cat TASKS/METRICS.json | jq -r '
+            "   • Total Tasks: \(.summary.total_tasks // 0)",
+            "   • Completed: \(.summary.completed // 0)",
+            "   • In Progress: \(.summary.in_progress // 0)",
+            "   • Success Rate: \(.metrics.success_rate // "N/A")%"
+          ' 2>/dev/null || echo "   ⚠️  Could not parse metrics"
+        else
+          echo "   ⚠️  No metrics available"
+        fi
+        
+        # Agent activity
+        if [ -f "PROJECT_LOG.md" ]; then
+          echo ""
+          echo "🤖 Recent Agent Activity:"
+          tail -10 PROJECT_LOG.md | grep "###" | while read -r line; do
+            echo "   $line"
+          done 2>/dev/null || echo "   ⚠️  No recent activity"
+        fi
+
+  # 🔧 Deployment Integration
+  deploy-monitors:
+    desc: "Deploy agent monitoring to production"
+    cmds:
+      - |
+        echo "🚀 Deploying agent monitoring..."
+        
+        # Deploy monitoring dashboards
+        if [ -f "infrastructure/grafana/agent-dashboard.json" ]; then
+          echo "📊 Deploying agent dashboards..."
+          # Copy to monitoring stack
+          cp infrastructure/grafana/agent-dashboard.json docker/grafana/dashboards/
+        fi
+        
+        # Configure alerts
+        if [ -f "infrastructure/prometheus/agent-alerts.yml" ]; then
+          echo "🚨 Configuring agent alerts..."
+          # Copy to Prometheus config
+          cp infrastructure/prometheus/agent-alerts.yml docker/prometheus/
+        fi
+        
+        echo "✅ Agent monitoring deployed"

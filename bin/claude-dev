@@ -1,0 +1,464 @@
+#!/usr/bin/env node
+
+const { Command } = require('commander');
+const chalk = require('chalk');
+const inquirer = require('inquirer');
+const { execSync } = require('child_process');
+const { existsSync } = require('fs');
+const { join } = require('path');
+
+const program = new Command();
+
+program
+  .name('claude-dev')
+  .description('🚀 Claude Developer OS - Auto-orchestrated development environment')
+  .version('1.0.0');
+
+// 🚀 THE MAIN COMMAND
+program
+  .command('dev', { isDefault: true })
+  .description('Start complete development environment')
+  .option('-f, --fresh', 'Fresh start (clean all containers)')
+  .option('-s, --silent', 'Silent mode (minimal output)')
+  .option('--no-agents', 'Skip agent system initialization')
+  .action(async (options) => {
+    console.log(chalk.blue(`
+╭─────────────────────────────────────────────────────────╮
+│  🚀 Claude Developer OS - Auto-Orchestrated Environment │
+│  AI Agents + Infrastructure + Cloud Sync               │  
+╰─────────────────────────────────────────────────────────╯
+`));
+
+    try {
+      // Check if Task runner is available
+      const hasTask = checkCommand('task');
+      if (!hasTask) {
+        console.log(chalk.yellow('⚠️  Task runner not found. Install with: brew install go-task/tap/go-task'));
+        console.log(chalk.blue('📋 Running basic setup instead...'));
+      }
+
+      // Phase 1: Project Analysis
+      console.log(chalk.cyan('🔍 Analyzing project state...'));
+      const analysis = await analyzeProject();
+      
+      if (options.fresh) {
+        console.log(chalk.yellow('🧹 Fresh start requested - cleaning environment...'));
+        await cleanInfrastructure();
+      }
+
+      // Phase 2: Environment Sync
+      console.log(chalk.cyan('🔄 Synchronizing environments...'));
+      if (hasTask) {
+        execSync('task sync:all', { stdio: 'inherit' });
+      } else {
+        await basicEnvironmentSync();
+      }
+
+      // Phase 3: Infrastructure Startup
+      console.log(chalk.cyan('🏗️  Starting infrastructure...'));
+      if (hasTask) {
+        execSync('task infra:start', { stdio: 'inherit' });
+      } else {
+        await startBasicInfrastructure();
+      }
+
+      // Phase 4: Health Check
+      console.log(chalk.cyan('🏥 Performing health checks...'));
+      const healthStatus = await checkBasicHealth();
+      
+      if (!healthStatus.healthy) {
+        console.log(chalk.yellow('⚠️  Some services need attention:'));
+        healthStatus.issues.forEach(issue => console.log(chalk.yellow(`   - ${issue}`)));
+      }
+
+      // Phase 5: Agent System Ready
+      if (!options.noAgents) {
+        console.log(chalk.cyan('🤖 Preparing agent system...'));
+        
+        // Check if repo is onboarded
+        if (!analysis.agentSystemReady) {
+          const shouldOnboard = await inquirer.prompt([{
+            type: 'confirm',
+            name: 'onboard',
+            message: 'Agent system not set up. Run repository onboarding?',
+            default: true
+          }]);
+          
+          if (shouldOnboard.onboard) {
+            try {
+              if (existsSync('scripts/repo-onboarding.sh')) {
+                execSync('bash scripts/repo-onboarding.sh .', { stdio: 'inherit' });
+              } else {
+                console.log(chalk.yellow('⚠️  Onboarding script not found - skipping'));
+              }
+            } catch (error) {
+              console.log(chalk.yellow('⚠️  Onboarding failed - continuing without agents'));
+            }
+          }
+        }
+      }
+
+      // Success!
+      console.log(chalk.green(`
+╭─── Development Environment Ready ───╮
+│ ✅ Infrastructure: Started          │
+│ ✅ Environment: Synchronized        │  
+│ ✅ Health Check: Completed          │
+│ ✅ Agent System: ${analysis.agentSystemReady ? 'Ready' : 'Available'}           │
+╰──────────────────────────────────────╯
+
+🌐 Local URLs:
+   • App: http://localhost:3000
+   • Database Studio: http://localhost:54323
+   • API Gateway: http://localhost:54321
+   • Monitoring: http://localhost:3001
+
+🤖 Available Commands:
+   • claude-dev status     # Check system health
+   • claude-dev sync       # Sync environments
+   • claude-dev deploy     # Deploy to production
+   • claude-dev clean      # Clean environment
+
+${hasTask ? '📋 Task Commands:' : '⚠️  Install Task for full features:'}
+${hasTask ? '   • task --list       # All available tasks' : '   • brew install go-task/tap/go-task'}
+${hasTask ? '   • task agents:spawn # Spawn AI agents' : ''}
+
+💡 Ready to code! Your environment is orchestrated.
+`));
+
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to start development environment:'));
+      console.error(chalk.red(error.message));
+      
+      console.log(chalk.yellow('\n🛠️  Try these troubleshooting steps:'));
+      console.log(chalk.yellow('   1. Check Docker is running: docker info'));
+      console.log(chalk.yellow('   2. Install Task: brew install go-task/tap/go-task'));
+      console.log(chalk.yellow('   3. Clean and retry: claude-dev clean && claude-dev'));
+      
+      process.exit(1);
+    }
+  });
+
+// 📊 Status Command
+program
+  .command('status')
+  .description('Show complete system status')
+  .action(async () => {
+    console.log(chalk.blue('📊 System Status'));
+    console.log(chalk.blue('================='));
+    
+    try {
+      const analysis = await analyzeProject();
+      const health = await checkBasicHealth();
+      
+      console.log(chalk.cyan('\n🏗️  Infrastructure:'));
+      console.log(`   Framework: ${analysis.framework} (${analysis.language})`);
+      console.log(`   Database: ${analysis.database ? '✅' : '❌'}`);
+      console.log(`   Supabase: ${analysis.hasSupabase ? '✅' : '❌'}`);
+      console.log(`   Vercel: ${analysis.hasVercel ? '✅' : '❌'}`);
+      console.log(`   Docker: ${analysis.hasDocker ? '✅' : '❌'}`);
+      
+      console.log(chalk.cyan('\n🏥 Health Status:'));
+      console.log(`   Docker: ${health.docker ? '✅' : '❌'}`);
+      console.log(`   Application: ${health.app ? '✅' : '❌'}`);
+      console.log(`   Task Runner: ${checkCommand('task') ? '✅' : '❌'}`);
+      
+      if (health.issues.length > 0) {
+        console.log(chalk.yellow('\n⚠️  Issues:'));
+        health.issues.forEach(issue => console.log(chalk.yellow(`   - ${issue}`)));
+      }
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Failed to get system status:'));
+      console.error(chalk.red(error.message));
+    }
+  });
+
+// 🔄 Sync Command
+program
+  .command('sync')
+  .description('Sync all environments and configurations')
+  .action(async () => {
+    console.log(chalk.blue('🔄 Synchronizing environments...'));
+    
+    try {
+      if (checkCommand('task')) {
+        execSync('task sync:all', { stdio: 'inherit' });
+      } else {
+        await basicEnvironmentSync();
+      }
+      
+      console.log(chalk.green('✅ Synchronization completed'));
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Synchronization failed:'));
+      console.error(chalk.red(error.message));
+    }
+  });
+
+// 🚀 Deploy Command
+program
+  .command('deploy')
+  .description('Deploy to production')
+  .option('-s, --staging', 'Deploy to staging instead')
+  .action(async (options) => {
+    const environment = options.staging ? 'staging' : 'production';
+    
+    console.log(chalk.blue(`🚀 Deploying to ${environment}...`));
+    
+    try {
+      if (checkCommand('task')) {
+        if (options.staging) {
+          execSync('task deploy:staging', { stdio: 'inherit' });
+        } else {
+          execSync('task deploy', { stdio: 'inherit' });
+        }
+      } else {
+        await basicDeploy(environment);
+      }
+      
+      console.log(chalk.green(`🎉 Deployment to ${environment} completed!`));
+      
+    } catch (error) {
+      console.error(chalk.red(`❌ Deployment to ${environment} failed:`));
+      console.error(chalk.red(error.message));
+      process.exit(1);
+    }
+  });
+
+// 🧹 Clean Command
+program
+  .command('clean')
+  .description('Clean development environment')
+  .option('--hard', 'Hard clean (remove all containers and volumes)')
+  .action(async (options) => {
+    console.log(chalk.yellow('🧹 Cleaning development environment...'));
+    
+    try {
+      await cleanInfrastructure(options.hard);
+      console.log(chalk.green('✅ Environment cleaned'));
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Cleaning failed:'));
+      console.error(chalk.red(error.message));
+    }
+  });
+
+// 🛠️ Setup Command
+program
+  .command('setup')
+  .description('Initial project setup and configuration')
+  .action(async () => {
+    console.log(chalk.blue('🛠️  Setting up Claude Developer OS...'));
+    
+    try {
+      await setupProject();
+      console.log(chalk.green('✅ Setup completed! Run "claude-dev" to start.'));
+      
+    } catch (error) {
+      console.error(chalk.red('❌ Setup failed:'));
+      console.error(chalk.red(error.message));
+    }
+  });
+
+// Helper Functions
+function checkCommand(command) {
+  try {
+    execSync(`command -v ${command}`, { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function analyzeProject() {
+  const analysis = {
+    framework: 'Unknown',
+    language: 'Unknown',
+    database: false,
+    hasSupabase: false,
+    hasVercel: false,
+    hasDocker: false,
+    agentSystemReady: false
+  };
+
+  // Detect framework and language
+  if (existsSync('package.json')) {
+    try {
+      const pkg = require(join(process.cwd(), 'package.json'));
+      
+      if (pkg.dependencies?.next) analysis.framework = 'Next.js';
+      else if (pkg.dependencies?.react) analysis.framework = 'React';
+      else if (pkg.dependencies?.express) analysis.framework = 'Express';
+      else analysis.framework = 'Node.js';
+      
+      analysis.language = 'JavaScript';
+      if (pkg.dependencies?.typescript || pkg.devDependencies?.typescript) {
+        analysis.language = 'TypeScript';
+      }
+    } catch (error) {
+      console.warn(chalk.yellow('⚠️  Could not parse package.json'));
+    }
+  }
+
+  // Check infrastructure components
+  analysis.hasSupabase = existsSync('supabase/config.toml');
+  analysis.hasVercel = existsSync('.vercel/project.json');
+  analysis.hasDocker = existsSync('docker-compose.yml') || existsSync('docker-compose.dev.yml');
+  analysis.database = analysis.hasSupabase || existsSync('prisma');
+  analysis.agentSystemReady = existsSync('PROJECT_MANIFESTO.md');
+
+  return analysis;
+}
+
+async function checkBasicHealth() {
+  const health = {
+    healthy: true,
+    docker: false,
+    app: false,
+    issues: []
+  };
+
+  // Check Docker
+  try {
+    execSync('docker info', { stdio: 'pipe' });
+    health.docker = true;
+  } catch {
+    health.issues.push('Docker not running');
+  }
+
+  // Check if app is responding
+  try {
+    const response = await fetch('http://localhost:3000').catch(() => null);
+    health.app = response?.ok || false;
+  } catch {
+    health.issues.push('Application not responding on port 3000');
+  }
+
+  health.healthy = health.issues.length === 0;
+  return health;
+}
+
+async function basicEnvironmentSync() {
+  console.log(chalk.blue('📝 Basic environment sync...'));
+  
+  // Create .env from .env.example if it exists
+  if (existsSync('.env.example') && !existsSync('.env')) {
+    execSync('cp .env.example .env');
+    console.log(chalk.green('   ✅ Created .env from .env.example'));
+  }
+  
+  // Pull Vercel env if available
+  if (checkCommand('vercel') && existsSync('.vercel/project.json')) {
+    try {
+      execSync('vercel env pull .env.vercel', { stdio: 'pipe' });
+      console.log(chalk.green('   ✅ Pulled Vercel environment'));
+    } catch {
+      console.log(chalk.yellow('   ⚠️  Could not pull Vercel environment'));
+    }
+  }
+}
+
+async function startBasicInfrastructure() {
+  console.log(chalk.blue('🚀 Starting basic infrastructure...'));
+  
+  // Start Docker Compose if available
+  if (checkCommand('docker')) {
+    const composeFile = existsSync('docker-compose.dev.yml') ? 'docker-compose.dev.yml' : 'docker-compose.yml';
+    
+    if (existsSync(composeFile)) {
+      try {
+        execSync(`docker-compose -f ${composeFile} up -d`, { stdio: 'inherit' });
+        console.log(chalk.green('   ✅ Docker Compose started'));
+      } catch (error) {
+        console.log(chalk.yellow('   ⚠️  Docker Compose failed to start'));
+      }
+    }
+  }
+  
+  // Start Supabase if available
+  if (checkCommand('supabase') && existsSync('supabase/config.toml')) {
+    try {
+      execSync('supabase start', { stdio: 'inherit' });
+      console.log(chalk.green('   ✅ Supabase started'));
+    } catch {
+      console.log(chalk.yellow('   ⚠️  Supabase already running or failed to start'));
+    }
+  }
+}
+
+async function basicDeploy(environment) {
+  console.log(chalk.blue(`🚀 Basic deployment to ${environment}...`));
+  
+  if (checkCommand('vercel')) {
+    try {
+      if (environment === 'production') {
+        execSync('vercel --prod', { stdio: 'inherit' });
+      } else {
+        execSync('vercel', { stdio: 'inherit' });
+      }
+      console.log(chalk.green('   ✅ Vercel deployment completed'));
+    } catch (error) {
+      throw new Error('Vercel deployment failed');
+    }
+  } else {
+    throw new Error('Vercel CLI not found - install with: npm i -g vercel');
+  }
+}
+
+async function cleanInfrastructure(hard = false) {
+  console.log(chalk.blue('🧹 Cleaning infrastructure...'));
+  
+  if (checkCommand('docker')) {
+    const composeFile = existsSync('docker-compose.dev.yml') ? 'docker-compose.dev.yml' : 'docker-compose.yml';
+    
+    if (existsSync(composeFile)) {
+      execSync(`docker-compose -f ${composeFile} down${hard ? ' -v' : ''}`, { stdio: 'inherit' });
+    }
+    
+    if (hard) {
+      execSync('docker system prune -a -f --volumes', { stdio: 'inherit' });
+    }
+  }
+}
+
+async function setupProject() {
+  console.log(chalk.blue('📦 Setting up project dependencies...'));
+  
+  // Install npm dependencies if package.json exists
+  if (existsSync('package.json')) {
+    if (existsSync('pnpm-lock.yaml')) {
+      execSync('pnpm install', { stdio: 'inherit' });
+    } else if (existsSync('yarn.lock')) {
+      execSync('yarn install', { stdio: 'inherit' });
+    } else {
+      execSync('npm install', { stdio: 'inherit' });
+    }
+  }
+  
+  // Initialize git if not already
+  if (!existsSync('.git')) {
+    execSync('git init', { stdio: 'inherit' });
+  }
+  
+  // Create basic directories
+  ['logs', 'tmp', '.claude'].forEach(dir => {
+    if (!existsSync(dir)) {
+      execSync(`mkdir -p ${dir}`);
+    }
+  });
+}
+
+// Handle unknown commands
+program.on('command:*', () => {
+  console.error(chalk.red('❌ Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
+  process.exit(1);
+});
+
+// Parse CLI arguments
+program.parse();
+
+// Show help if no command provided
+if (!process.argv.slice(2).length) {
+  program.outputHelp();
+}

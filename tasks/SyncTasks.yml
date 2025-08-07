@@ -1,0 +1,475 @@
+# Environment Synchronization Tasks
+# Sync between local, Vercel, Supabase, and Docker
+
+version: '3'
+
+vars:
+  SUPABASE_PROJECT_REF: '{{.SUPABASE_PROJECT_REF}}'
+  VERCEL_PROJECT: '{{.VERCEL_PROJECT}}'
+
+tasks:
+  # 🔄 Main Sync Command
+  all:
+    desc: "Sync all environments and configurations"
+    cmds:
+      - echo "🔄 Synchronizing all environments..."
+      - task: vercel
+      - task: supabase
+      - task: env
+      - task: types
+      - task: docker
+      - echo "✅ All environments synchronized"
+
+  # 📡 Vercel Sync
+  vercel:
+    desc: "Sync Vercel environment"
+    cmds:
+      - echo "📡 Syncing Vercel environment..."
+      - task: vercel-pull
+      - task: vercel-link-check
+      - echo "✅ Vercel sync completed"
+
+  vercel-pull:
+    internal: true
+    cmds:
+      - |
+        if command -v vercel >/dev/null 2>&1; then
+          echo "📥 Pulling Vercel environment variables..."
+          
+          # Pull all environments
+          for env in development staging production; do
+            if vercel env pull .env.vercel.$env --environment=$env 2>/dev/null; then
+              echo "   ✅ Pulled $env environment"
+            else
+              echo "   ⚠️  Could not pull $env environment (may not exist)"
+            fi
+          done
+          
+          # Pull default development environment
+          vercel env pull .env.vercel 2>/dev/null || echo "   ⚠️  Could not pull default environment"
+          
+        else
+          echo "⚠️  Vercel CLI not found - skipping Vercel sync"
+        fi
+
+  vercel-link-check:
+    internal: true
+    cmds:
+      - |
+        if [ ! -f ".vercel/project.json" ]; then
+          echo "🔗 Vercel project not linked"
+          echo "   Run 'vercel link' to connect this project to Vercel"
+        else
+          PROJECT_ID=$(cat .vercel/project.json | grep -o '"projectId":"[^"]*' | cut -d'"' -f4)
+          echo "✅ Linked to Vercel project: $PROJECT_ID"
+        fi
+
+  vercel-push:
+    desc: "Push local environment to Vercel"
+    cmds:
+      - |
+        ENV_FILE="${CLI_ARGS:-.env.production}"
+        TARGET_ENV="production"
+        
+        if [ ! -f "$ENV_FILE" ]; then
+          echo "❌ Environment file not found: $ENV_FILE"
+          exit 1
+        fi
+        
+        echo "📤 Pushing $ENV_FILE to Vercel ($TARGET_ENV)..."
+        
+        # Clear existing environment variables
+        vercel env ls $TARGET_ENV 2>/dev/null | tail -n +2 | while read -r key; do
+          if [ -n "$key" ] && [ "$key" != "Key" ]; then
+            vercel env rm "$key" $TARGET_ENV --yes >/dev/null 2>&1 || true
+          fi
+        done
+        
+        # Push new variables
+        while IFS= read -r line; do
+          if [[ $line =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]]; then
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            
+            # Remove surrounding quotes if present
+            value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/')
+            
+            echo "   Setting $key..."
+            echo "$value" | vercel env add "$key" $TARGET_ENV --force >/dev/null || echo "⚠️  Failed to set $key"
+          fi
+        done < "$ENV_FILE"
+        
+        echo "✅ Environment variables pushed to Vercel"
+
+  # 🗄️ Supabase Sync
+  supabase:
+    desc: "Sync Supabase configuration"
+    cmds:
+      - echo "🗄️  Syncing Supabase configuration..."
+      - task: supabase-start
+      - task: supabase-migrate
+      - task: supabase-types
+      - echo "✅ Supabase sync completed"
+
+  supabase-start:
+    internal: true
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1; then
+          if [ -f "supabase/config.toml" ]; then
+            echo "🚀 Starting Supabase local..."
+            
+            # Check if already running
+            if supabase status 2>/dev/null | grep -q "Running"; then
+              echo "   ✅ Supabase already running"
+            else
+              supabase start || echo "⚠️  Supabase start failed (may already be running)"
+            fi
+          else
+            echo "⚠️  Supabase not initialized in this project"
+            echo "   Run 'supabase init' to initialize"
+          fi
+        else
+          echo "⚠️  Supabase CLI not found - skipping Supabase sync"
+        fi
+
+  supabase-migrate:
+    internal: true
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1 && [ -f "supabase/config.toml" ]; then
+          echo "🔄 Running Supabase migrations..."
+          
+          # Run local migrations
+          if supabase migration up 2>/dev/null; then
+            echo "   ✅ Local migrations completed"
+          else
+            echo "   ⚠️  No migrations to apply or migration failed"
+          fi
+          
+          # Sync with remote if configured
+          if [ -n "{{.SUPABASE_PROJECT_REF}}" ]; then
+            echo "☁️  Syncing with remote Supabase..."
+            supabase db pull --project-ref {{.SUPABASE_PROJECT_REF}} 2>/dev/null || echo "   ⚠️  Remote sync failed"
+          fi
+        fi
+
+  supabase-types:
+    internal: true
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1; then
+          echo "📝 Generating Supabase types..."
+          mkdir -p types
+          
+          # Generate from local instance
+          if supabase gen types typescript --local > types/supabase.ts 2>/dev/null; then
+            echo "   ✅ Types generated from local instance"
+          elif [ -n "{{.SUPABASE_PROJECT_REF}}" ]; then
+            echo "   Generating types from remote instance..."
+            supabase gen types typescript --project-id {{.SUPABASE_PROJECT_REF}} > types/supabase.ts 2>/dev/null || echo "   ⚠️  Type generation failed"
+          else
+            echo "   ⚠️  Could not generate types (no local or remote instance)"
+          fi
+        fi
+
+  # 🔧 Environment File Sync
+  env:
+    desc: "Sync environment files"
+    cmds:
+      - echo "🔧 Synchronizing environment files..."
+      - task: env-merge
+      - task: env-validate
+      - echo "✅ Environment sync completed"
+
+  env-merge:
+    internal: true
+    cmds:
+      - |
+        echo "🔄 Merging environment files..."
+        
+        # Create merged .env file
+        node -e "
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Priority order (later overrides earlier)
+          const envFiles = [
+            '.env.example',
+            '.env.vercel',
+            '.env.vercel.development', 
+            '.env.local'
+          ];
+          
+          let merged = {};
+          let sources = [];
+          
+          envFiles.forEach(file => {
+            if (fs.existsSync(file)) {
+              const content = fs.readFileSync(file, 'utf8');
+              const lines = content.split('\n');
+              
+              lines.forEach(line => {
+                line = line.trim();
+                if (line && !line.startsWith('#') && line.includes('=')) {
+                  const [key, ...valueParts] = line.split('=');
+                  const value = valueParts.join('=');
+                  merged[key] = value;
+                }
+              });
+              
+              sources.push(file);
+            }
+          });
+          
+          if (sources.length > 0) {
+            const envContent = Object.entries(merged)
+              .map(([key, value]) => \`\${key}=\${value}\`)
+              .join('\n');
+            
+            fs.writeFileSync('.env', envContent);
+            console.log(\`   ✅ Merged environment from: \${sources.join(', ')}\`);
+          } else {
+            console.log('   ⚠️  No environment files found to merge');
+          }
+        " 2>/dev/null || echo "   ⚠️  Environment merge failed"
+
+  env-validate:
+    internal: true
+    cmds:
+      - |
+        echo "✅ Validating environment configuration..."
+        
+        if [ -f ".env" ]; then
+          # Check for common required variables
+          REQUIRED_VARS="DATABASE_URL NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          MISSING=""
+          
+          for var in $REQUIRED_VARS; do
+            if ! grep -q "^$var=" .env 2>/dev/null; then
+              MISSING="$MISSING $var"
+            fi
+          done
+          
+          if [ -n "$MISSING" ]; then
+            echo "   ⚠️  Missing environment variables:$MISSING"
+          else
+            echo "   ✅ All required environment variables present"
+          fi
+          
+          # Count total variables
+          VAR_COUNT=$(grep -c "^[A-Z]" .env 2>/dev/null || echo 0)
+          echo "   📊 Total environment variables: $VAR_COUNT"
+        else
+          echo "   ❌ No .env file found"
+        fi
+
+  # 📝 Type Generation
+  types:
+    desc: "Generate and sync TypeScript types"
+    cmds:
+      - echo "📝 Generating TypeScript types..."
+      - task: types-supabase
+      - task: types-validate
+      - echo "✅ Type generation completed"
+
+  types-supabase:
+    internal: true
+    cmds:
+      - task: supabase-types
+
+  types-validate:
+    internal: true
+    cmds:
+      - |
+        if [ -f "package.json" ] && grep -q '"typescript"' package.json; then
+          echo "🔍 Validating TypeScript configuration..."
+          
+          if command -v tsc >/dev/null 2>&1; then
+            if npx tsc --noEmit --skipLibCheck 2>/dev/null; then
+              echo "   ✅ TypeScript validation passed"
+            else
+              echo "   ⚠️  TypeScript validation found issues"
+            fi
+          else
+            echo "   ⚠️  TypeScript compiler not found"
+          fi
+        else
+          echo "   ⚠️  TypeScript not configured in this project"
+        fi
+
+  # 🐳 Docker Environment Sync
+  docker:
+    desc: "Sync Docker environment"
+    cmds:
+      - echo "🐳 Syncing Docker environment..."
+      - task: docker-env-sync
+      - task: docker-compose-validate
+      - echo "✅ Docker sync completed"
+
+  docker-env-sync:
+    internal: true
+    cmds:
+      - |
+        echo "🔄 Syncing environment to Docker..."
+        
+        # Copy environment file for Docker
+        if [ -f ".env" ]; then
+          cp .env .env.docker
+          echo "   ✅ Environment copied to .env.docker"
+        else
+          echo "   ⚠️  No .env file to sync"
+        fi
+        
+        # Update docker-compose environment
+        if [ -f "docker-compose.dev.yml" ]; then
+          echo "   📋 Docker Compose configuration found"
+        else
+          echo "   ⚠️  No Docker Compose configuration found"
+        fi
+
+  docker-compose-validate:
+    internal: true
+    cmds:
+      - |
+        echo "✅ Validating Docker Compose configuration..."
+        
+        COMPOSE_FILES="docker-compose.yml docker-compose.dev.yml"
+        
+        for file in $COMPOSE_FILES; do
+          if [ -f "$file" ]; then
+            if docker-compose -f "$file" config >/dev/null 2>&1; then
+              echo "   ✅ $file is valid"
+            else
+              echo "   ❌ $file has configuration errors"
+            fi
+          fi
+        done
+
+  # 🔍 Sync Status
+  status:
+    desc: "Show synchronization status"
+    cmds:
+      - echo "📊 Synchronization Status"
+      - echo "========================"
+      - task: status-vercel
+      - task: status-supabase
+      - task: status-env
+      - task: status-docker
+
+  status-vercel:
+    internal: true
+    cmds:
+      - |
+        echo "📡 Vercel Status:"
+        
+        if [ -f ".vercel/project.json" ]; then
+          PROJECT_ID=$(cat .vercel/project.json | grep -o '"projectId":"[^"]*' | cut -d'"' -f4 2>/dev/null)
+          echo "   ✅ Linked to project: $PROJECT_ID"
+        else
+          echo "   ❌ Not linked to Vercel project"
+        fi
+        
+        # Check for Vercel env files
+        for env in .env.vercel .env.vercel.development .env.vercel.staging .env.vercel.production; do
+          if [ -f "$env" ]; then
+            VAR_COUNT=$(grep -c "^[A-Z]" "$env" 2>/dev/null || echo 0)
+            echo "   📄 $env: $VAR_COUNT variables"
+          fi
+        done
+
+  status-supabase:
+    internal: true
+    cmds:
+      - |
+        echo "🗄️  Supabase Status:"
+        
+        if [ -f "supabase/config.toml" ]; then
+          echo "   ✅ Supabase initialized"
+          
+          if command -v supabase >/dev/null 2>&1; then
+            if supabase status 2>/dev/null | grep -q "Running"; then
+              echo "   🟢 Local instance: Running"
+            else
+              echo "   ⚪ Local instance: Stopped"
+            fi
+          fi
+        else
+          echo "   ❌ Supabase not initialized"
+        fi
+        
+        # Check types file
+        if [ -f "types/supabase.ts" ]; then
+          SIZE=$(wc -c < "types/supabase.ts" 2>/dev/null || echo 0)
+          echo "   📝 Types file: $SIZE bytes"
+        else
+          echo "   ❌ No types file generated"
+        fi
+
+  status-env:
+    internal: true
+    cmds:
+      - |
+        echo "🔧 Environment Status:"
+        
+        # Count variables in each env file
+        for env in .env.example .env.local .env .env.docker; do
+          if [ -f "$env" ]; then
+            VAR_COUNT=$(grep -c "^[A-Z]" "$env" 2>/dev/null || echo 0)
+            echo "   📄 $env: $VAR_COUNT variables"
+          fi
+        done
+        
+        # Check for missing required files
+        if [ ! -f ".env" ]; then
+          echo "   ⚠️  .env file missing - run 'task sync:env' to create"
+        fi
+
+  status-docker:
+    internal: true
+    cmds:
+      - |
+        echo "🐳 Docker Status:"
+        
+        if command -v docker >/dev/null 2>&1; then
+          if docker info >/dev/null 2>&1; then
+            echo "   ✅ Docker daemon: Running"
+            
+            # Check for compose files
+            for file in docker-compose.yml docker-compose.dev.yml; do
+              if [ -f "$file" ]; then
+                echo "   📄 $file: Available"
+              fi
+            done
+          else
+            echo "   ❌ Docker daemon: Not running"
+          fi
+        else
+          echo "   ❌ Docker not installed"
+        fi
+
+  # 🧹 Sync Cleanup
+  clean:
+    desc: "Clean sync artifacts"
+    cmds:
+      - |
+        echo "🧹 Cleaning sync artifacts..."
+        
+        # Remove temporary sync files
+        rm -f .env.vercel.* .env.docker .env.backup
+        
+        # Clean Supabase cache
+        if [ -d "supabase/.temp" ]; then
+          rm -rf supabase/.temp
+        fi
+        
+        echo "✅ Sync artifacts cleaned"
+
+  # 🔄 Force Refresh
+  refresh:
+    desc: "Force refresh all synchronization"
+    cmds:
+      - echo "🔄 Force refreshing all synchronization..."
+      - task: clean
+      - task: all
+      - echo "✅ Full refresh completed"

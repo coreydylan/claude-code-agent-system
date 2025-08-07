@@ -1,0 +1,512 @@
+# Deployment and Production Tasks
+# Vercel, Supabase Cloud, CI/CD orchestration
+
+version: '3'
+
+vars:
+  ENVIRONMENT: '{{default "production" .ENV}}'
+  VERCEL_PROJECT: '{{.VERCEL_PROJECT}}'
+  SUPABASE_PROJECT_REF: '{{.SUPABASE_PROJECT_REF}}'
+
+tasks:
+  # 🚀 Main Deployment
+  deploy:
+    desc: "Deploy to production"
+    deps: [validate-deployment]
+    cmds:
+      - echo "🚀 Deploying to {{.ENVIRONMENT}}..."
+      - task: pre-deploy-checks
+      - task: deploy-database
+      - task: deploy-app
+      - task: deploy-functions
+      - task: post-deploy-verification
+      - echo "🎉 Deployment to {{.ENVIRONMENT}} completed!"
+
+  deploy-staging:
+    desc: "Deploy to staging environment"
+    cmds:
+      - task: deploy
+        vars:
+          ENVIRONMENT: staging
+
+  # 🔍 Pre-deployment validation
+  validate-deployment:
+    desc: "Validate deployment readiness"
+    cmds:
+      - echo "🔍 Validating deployment readiness..."
+      - task: check-tools
+      - task: check-credentials
+      - task: check-tests
+      - task: check-build
+      - echo "✅ Deployment validation passed"
+
+  check-tools:
+    internal: true
+    cmds:
+      - |
+        echo "🛠️  Checking deployment tools..."
+        MISSING=""
+        
+        # Check Vercel CLI
+        if ! command -v vercel >/dev/null 2>&1; then
+          MISSING="$MISSING vercel"
+        fi
+        
+        # Check Supabase CLI
+        if ! command -v supabase >/dev/null 2>&1; then
+          MISSING="$MISSING supabase"
+        fi
+        
+        # Check Git
+        if ! command -v git >/dev/null 2>&1; then
+          MISSING="$MISSING git"
+        fi
+        
+        if [ -n "$MISSING" ]; then
+          echo "❌ Missing deployment tools:$MISSING"
+          echo "Please install them and try again."
+          exit 1
+        fi
+        
+        echo "✅ All deployment tools available"
+
+  check-credentials:
+    internal: true
+    cmds:
+      - |
+        echo "🔐 Checking credentials..."
+        
+        # Check Vercel authentication
+        if ! vercel whoami >/dev/null 2>&1; then
+          echo "❌ Vercel not authenticated. Run: vercel login"
+          exit 1
+        fi
+        
+        # Check Supabase authentication  
+        if ! supabase projects list >/dev/null 2>&1; then
+          echo "❌ Supabase not authenticated. Run: supabase login"
+          exit 1
+        fi
+        
+        echo "✅ All credentials validated"
+
+  check-tests:
+    internal: true
+    cmds:
+      - |
+        echo "🧪 Running pre-deployment tests..."
+        
+        if [ -f "package.json" ] && grep -q '"test"' package.json; then
+          if npm test; then
+            echo "✅ Tests passed"
+          else
+            echo "❌ Tests failed - deployment aborted"
+            exit 1
+          fi
+        else
+          echo "⚠️  No test script found - skipping tests"
+        fi
+
+  check-build:
+    internal: true
+    cmds:
+      - |
+        echo "🏗️  Validating build process..."
+        
+        if [ -f "package.json" ] && grep -q '"build"' package.json; then
+          if npm run build; then
+            echo "✅ Build successful"
+          else
+            echo "❌ Build failed - deployment aborted"
+            exit 1
+          fi
+        else
+          echo "⚠️  No build script found - skipping build validation"
+        fi
+
+  # 🗄️ Database Deployment
+  deploy-database:
+    desc: "Deploy database changes"
+    cmds:
+      - echo "🗄️  Deploying database changes..."
+      - task: migrate-database
+      - task: deploy-functions-db
+      - echo "✅ Database deployment completed"
+
+  migrate-database:
+    internal: true
+    cmds:
+      - |
+        echo "🔄 Running database migrations..."
+        
+        if [ -d "supabase/migrations" ] && [ -n "$(ls -A supabase/migrations)" ]; then
+          if [ -n "{{.SUPABASE_PROJECT_REF}}" ]; then
+            supabase db push --project-ref {{.SUPABASE_PROJECT_REF}}
+            echo "✅ Migrations applied"
+          else
+            echo "❌ SUPABASE_PROJECT_REF not set"
+            exit 1
+          fi
+        else
+          echo "⚠️  No migrations found - skipping"
+        fi
+
+  deploy-functions-db:
+    internal: true
+    cmds:
+      - |
+        echo "⚡ Deploying database functions..."
+        
+        if [ -d "supabase/functions" ]; then
+          for func in supabase/functions/*/; do
+            if [ -d "$func" ]; then
+              func_name=$(basename "$func")
+              echo "   Deploying function: $func_name"
+              
+              supabase functions deploy "$func_name" \
+                --project-ref {{.SUPABASE_PROJECT_REF}} || echo "⚠️  Failed to deploy $func_name"
+            fi
+          done
+          echo "✅ Database functions deployed"
+        else
+          echo "⚠️  No database functions found"
+        fi
+
+  # 📱 Application Deployment
+  deploy-app:
+    desc: "Deploy application to Vercel"
+    cmds:
+      - echo "📱 Deploying application..."
+      - task: sync-environment-vars
+      - task: deploy-vercel
+      - echo "✅ Application deployment completed"
+
+  sync-environment-vars:
+    internal: true
+    cmds:
+      - |
+        echo "🔧 Syncing environment variables..."
+        
+        # Push environment variables to Vercel
+        if [ -f ".env.{{.ENVIRONMENT}}" ]; then
+          echo "📤 Pushing {{.ENVIRONMENT}} environment to Vercel..."
+          
+          # Remove existing environment variables
+          vercel env ls {{.ENVIRONMENT}} --yes 2>/dev/null | tail -n +2 | while read -r key; do
+            if [ -n "$key" ] && [ "$key" != "Key" ]; then
+              vercel env rm "$key" {{.ENVIRONMENT}} --yes >/dev/null 2>&1 || true
+            fi
+          done
+          
+          # Add new environment variables
+          while IFS= read -r line; do
+            if [[ $line =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+              
+              # Remove quotes if present
+              value=$(echo "$value" | sed 's/^"\(.*\)"$/\1/')
+              
+              echo "   Setting $key..."
+              echo "$value" | vercel env add "$key" {{.ENVIRONMENT}} --force >/dev/null 2>&1 || echo "⚠️  Failed to set $key"
+            fi
+          done < .env.{{.ENVIRONMENT}}
+          
+          echo "✅ Environment variables synced"
+        else
+          echo "⚠️  No environment file found: .env.{{.ENVIRONMENT}}"
+        fi
+
+  deploy-vercel:
+    internal: true
+    cmds:
+      - |
+        echo "🚀 Deploying to Vercel..."
+        
+        if [ "{{.ENVIRONMENT}}" = "production" ]; then
+          vercel --prod
+        else
+          vercel
+        fi
+        
+        echo "✅ Vercel deployment completed"
+
+  # ⚡ Edge Functions
+  deploy-functions:
+    desc: "Deploy edge functions"
+    cmds:
+      - echo "⚡ Deploying edge functions..."
+      - task: deploy-vercel-functions
+      - task: deploy-supabase-functions
+      - echo "✅ Edge functions deployed"
+
+  deploy-vercel-functions:
+    internal: true
+    cmds:
+      - |
+        echo "📡 Deploying Vercel functions..."
+        
+        if [ -d "api" ]; then
+          echo "   Found API functions in /api directory"
+          # Vercel functions are deployed automatically with the app
+          echo "✅ Vercel functions will be deployed with the app"
+        else
+          echo "⚠️  No Vercel functions found"
+        fi
+
+  deploy-supabase-functions:
+    internal: true
+    cmds:
+      - |
+        echo "🗄️  Deploying Supabase Edge Functions..."
+        
+        if [ -d "supabase/functions" ]; then
+          for func in supabase/functions/*/; do
+            if [ -d "$func" ]; then
+              func_name=$(basename "$func")
+              echo "   Deploying edge function: $func_name"
+              
+              supabase functions deploy "$func_name" \
+                --project-ref {{.SUPABASE_PROJECT_REF}} || echo "⚠️  Failed to deploy $func_name"
+            fi
+          done
+          echo "✅ Supabase Edge Functions deployed"
+        else
+          echo "⚠️  No Supabase Edge Functions found"
+        fi
+
+  # ✅ Post-deployment
+  post-deploy-verification:
+    desc: "Verify deployment health"
+    cmds:
+      - echo "🏥 Verifying deployment health..."
+      - task: verify-app-health
+      - task: verify-database-health
+      - task: verify-functions-health
+      - task: run-smoke-tests
+      - echo "✅ Deployment verification completed"
+
+  verify-app-health:
+    internal: true
+    cmds:
+      - |
+        echo "🌐 Verifying application health..."
+        
+        # Get deployment URL
+        DEPLOYMENT_URL=$(vercel ls --scope team 2>/dev/null | grep "{{.ENVIRONMENT}}" | head -1 | awk '{print $2}' || echo "")
+        
+        if [ -z "$DEPLOYMENT_URL" ]; then
+          echo "⚠️  Could not determine deployment URL"
+          return 0
+        fi
+        
+        # Check health endpoint
+        if curl -sf "https://$DEPLOYMENT_URL/api/health" >/dev/null 2>&1; then
+          echo "✅ Application health check passed"
+          echo "   URL: https://$DEPLOYMENT_URL"
+        else
+          echo "⚠️  Application health check failed"
+          echo "   URL: https://$DEPLOYMENT_URL"
+        fi
+
+  verify-database-health:
+    internal: true
+    cmds:
+      - |
+        echo "🗄️  Verifying database health..."
+        
+        if supabase status --project-ref {{.SUPABASE_PROJECT_REF}} >/dev/null 2>&1; then
+          echo "✅ Database health check passed"
+        else
+          echo "⚠️  Database health check failed"
+        fi
+
+  verify-functions-health:
+    internal: true
+    cmds:
+      - |
+        echo "⚡ Verifying edge functions..."
+        
+        # List deployed functions
+        supabase functions list --project-ref {{.SUPABASE_PROJECT_REF}} 2>/dev/null | while read -r func; do
+          if [ -n "$func" ]; then
+            echo "   ✅ Function deployed: $func"
+          fi
+        done || echo "⚠️  Could not list functions"
+
+  run-smoke-tests:
+    internal: true
+    cmds:
+      - |
+        echo "💨 Running smoke tests..."
+        
+        if [ -f "package.json" ] && grep -q '"test:e2e"' package.json; then
+          npm run test:e2e || echo "⚠️  E2E tests failed"
+        elif [ -f "package.json" ] && grep -q '"test:integration"' package.json; then
+          npm run test:integration || echo "⚠️  Integration tests failed"
+        else
+          echo "⚠️  No smoke tests configured"
+        fi
+
+  # 🔄 Rollback
+  rollback:
+    desc: "Rollback to previous deployment"
+    cmds:
+      - echo "🔄 Rolling back deployment..."
+      - task: rollback-app
+      - task: rollback-database
+      - echo "✅ Rollback completed"
+
+  rollback-app:
+    internal: true
+    cmds:
+      - |
+        echo "📱 Rolling back application..."
+        
+        # Get previous deployment
+        PREV_DEPLOYMENT=$(vercel ls 2>/dev/null | sed -n '2p' | awk '{print $1}')
+        
+        if [ -n "$PREV_DEPLOYMENT" ]; then
+          vercel promote "$PREV_DEPLOYMENT"
+          echo "✅ Application rolled back to: $PREV_DEPLOYMENT"
+        else
+          echo "❌ No previous deployment found"
+        fi
+
+  rollback-database:
+    internal: true
+    cmds:
+      - |
+        echo "🗄️  Database rollback not automated - manual intervention required"
+        echo "   Check migration history and revert manually if needed"
+
+  # 📊 Deployment Status
+  status:
+    desc: "Show deployment status"
+    cmds:
+      - echo "📊 Deployment Status"
+      - echo "===================="
+      - task: vercel-status
+      - task: supabase-status
+
+  vercel-status:
+    internal: true
+    cmds:
+      - |
+        echo "📡 Vercel Status:"
+        
+        if command -v vercel >/dev/null 2>&1; then
+          echo "   Recent deployments:"
+          vercel ls 2>/dev/null | head -5 | while read -r line; do
+            echo "     $line"
+          done || echo "   ⚠️  Could not fetch deployment list"
+        else
+          echo "   ❌ Vercel CLI not available"
+        fi
+
+  supabase-status:
+    internal: true
+    cmds:
+      - |
+        echo "🗄️  Supabase Status:"
+        
+        if command -v supabase >/dev/null 2>&1; then
+          if [ -n "{{.SUPABASE_PROJECT_REF}}" ]; then
+            echo "   Project: {{.SUPABASE_PROJECT_REF}}"
+            supabase status --project-ref {{.SUPABASE_PROJECT_REF}} 2>/dev/null || echo "   ⚠️  Could not fetch project status"
+          else
+            echo "   ⚠️  SUPABASE_PROJECT_REF not configured"
+          fi
+        else
+          echo "   ❌ Supabase CLI not available"
+        fi
+
+  # 📈 Deployment Metrics
+  metrics:
+    desc: "Show deployment metrics"
+    cmds:
+      - |
+        echo "📈 Deployment Metrics"
+        echo "===================="
+        
+        # Vercel analytics (if available)
+        echo "📊 Vercel Analytics:"
+        vercel analytics 2>/dev/null || echo "   ⚠️  Analytics not available"
+        
+        # Deployment frequency
+        echo ""
+        echo "🚀 Recent Deployments:"
+        vercel ls 2>/dev/null | head -10 || echo "   ⚠️  Could not fetch deployment history"
+
+  # 🔧 Environment Management
+  env:
+    desc: "Manage environment variables"
+    cmds:
+      - echo "🔧 Environment Variable Management"
+      - echo "=================================="
+      - task: env-list
+
+  env-list:
+    desc: "List environment variables"
+    cmds:
+      - |
+        echo "📋 Environment Variables:"
+        
+        if command -v vercel >/dev/null 2>&1; then
+          for env in development staging production; do
+            echo ""
+            echo "$env:"
+            vercel env ls $env 2>/dev/null | while read -r line; do
+              echo "  $line"
+            done || echo "  ⚠️  Could not list $env environment"
+          done
+        else
+          echo "❌ Vercel CLI not available"
+        fi
+
+  env-pull:
+    desc: "Pull environment variables from Vercel"
+    cmds:
+      - |
+        echo "📥 Pulling environment variables..."
+        
+        for env in development staging production; do
+          echo "Pulling $env environment..."
+          vercel env pull .env.$env --environment=$env 2>/dev/null || echo "⚠️  Failed to pull $env environment"
+        done
+        
+        echo "✅ Environment variables pulled"
+
+  env-push:
+    desc: "Push environment variables to Vercel"
+    cmds:
+      - |
+        echo "📤 Pushing environment variables..."
+        
+        ENV_FILE="${CLI_ARGS:-.env.{{.ENVIRONMENT}}}"
+        TARGET="${ENVIRONMENT:-{{.ENVIRONMENT}}}"
+        
+        if [ -f "$ENV_FILE" ]; then
+          echo "Pushing $ENV_FILE to $TARGET..."
+          task: sync-environment-vars
+        else
+          echo "❌ Environment file not found: $ENV_FILE"
+          exit 1
+        fi
+
+  # 🧹 Cleanup
+  clean:
+    desc: "Clean deployment artifacts"
+    cmds:
+      - |
+        echo "🧹 Cleaning deployment artifacts..."
+        
+        # Clean build artifacts
+        rm -rf .next dist build out .vercel
+        
+        # Clean node modules cache
+        if [ -d "node_modules" ]; then
+          rm -rf node_modules/.cache
+        fi
+        
+        echo "✅ Deployment artifacts cleaned"

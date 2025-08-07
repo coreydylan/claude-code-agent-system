@@ -1,0 +1,540 @@
+# Infrastructure Management Tasks
+# Docker, Vercel, Supabase orchestration
+
+version: '3'
+
+vars:
+  COMPOSE_FILE: '{{default "docker-compose.dev.yml" .COMPOSE_FILE}}'
+  ENVIRONMENT: '{{default "development" .ENV}}'
+  PROJECT_NAME: '{{default "my-app" .PROJECT_NAME}}'
+
+tasks:
+  # 🏗️ Infrastructure Lifecycle
+  start:
+    desc: "Start all infrastructure services"
+    cmds:
+      - echo "🏗️  Starting infrastructure..."
+      - task: validate-requirements
+      - task: prepare-environment
+      - task: start-containers
+      - task: wait-healthy
+      - echo "✅ Infrastructure started successfully"
+
+  stop:
+    desc: "Stop all infrastructure services"
+    cmds:
+      - echo "🛑 Stopping infrastructure..."
+      - docker-compose -f {{.COMPOSE_FILE}} down
+      - echo "✅ Infrastructure stopped"
+
+  restart:
+    desc: "Restart infrastructure services"
+    cmds:
+      - task: stop
+      - sleep 5
+      - task: start
+
+  # 🔧 Environment Setup
+  init:
+    desc: "Initialize infrastructure for first time"
+    cmds:
+      - echo "🏗️  Initializing infrastructure..."
+      - task: validate-requirements
+      - task: create-networks
+      - task: create-volumes
+      - task: setup-ssl
+      - task: generate-configs
+      - echo "✅ Infrastructure initialized"
+
+  validate-requirements:
+    internal: true
+    cmds:
+      - |
+        echo "🔍 Validating requirements..."
+        MISSING=""
+        
+        # Check Docker
+        if ! command -v docker >/dev/null 2>&1; then
+          MISSING="$MISSING docker"
+        fi
+        
+        # Check Docker Compose
+        if ! command -v docker-compose >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1; then
+          MISSING="$MISSING docker-compose"
+        fi
+        
+        # Check if Docker is running
+        if ! docker info >/dev/null 2>&1; then
+          echo "❌ Docker is not running"
+          exit 1
+        fi
+        
+        if [ -n "$MISSING" ]; then
+          echo "❌ Missing required tools:$MISSING"
+          echo "Please install them and try again."
+          exit 1
+        fi
+        
+        echo "✅ All requirements satisfied"
+
+  prepare-environment:
+    internal: true
+    cmds:
+      - |
+        echo "🔧 Preparing environment..."
+        
+        # Create .env file if it doesn't exist
+        if [ ! -f ".env" ]; then
+          if [ -f ".env.example" ]; then
+            cp .env.example .env
+            echo "📝 Created .env from .env.example"
+          else
+            echo "⚠️  No .env file found and no .env.example to copy"
+          fi
+        fi
+        
+        # Ensure required directories exist
+        mkdir -p infrastructure/{nginx,prometheus,grafana,ssl}
+        mkdir -p docker/{data,logs,cache}
+        
+        echo "✅ Environment prepared"
+
+  create-networks:
+    internal: true
+    cmds:
+      - |
+        echo "🌐 Creating Docker networks..."
+        
+        # Create custom network if it doesn't exist
+        if ! docker network ls | grep -q "claude-dev"; then
+          docker network create claude-dev --driver bridge --subnet=172.20.0.0/16
+          echo "✅ Created claude-dev network"
+        else
+          echo "✅ Network claude-dev already exists"
+        fi
+
+  create-volumes:
+    internal: true
+    cmds:
+      - |
+        echo "💾 Creating Docker volumes..."
+        
+        # Define volumes
+        VOLUMES="postgres_data redis_data grafana_data prometheus_data storage_data elasticsearch_data"
+        
+        for vol in $VOLUMES; do
+          if ! docker volume ls | grep -q "$vol"; then
+            docker volume create $vol
+            echo "✅ Created volume: $vol"
+          else
+            echo "✅ Volume $vol already exists"
+          fi
+        done
+
+  setup-ssl:
+    internal: true
+    cmds:
+      - |
+        echo "🔐 Setting up SSL certificates..."
+        
+        if [ ! -f "infrastructure/ssl/localhost.crt" ]; then
+          mkdir -p infrastructure/ssl
+          
+          # Generate self-signed certificate for local development
+          openssl req -x509 -newkey rsa:4096 -keyout infrastructure/ssl/localhost.key \
+            -out infrastructure/ssl/localhost.crt -days 365 -nodes \
+            -subj "/C=US/ST=Dev/L=Local/O=Claude/OU=Development/CN=localhost" 2>/dev/null
+          
+          echo "✅ Generated SSL certificates"
+        else
+          echo "✅ SSL certificates already exist"
+        fi
+
+  generate-configs:
+    internal: true
+    cmds:
+      - task: generate-nginx-config
+      - task: generate-prometheus-config
+      - task: generate-grafana-config
+
+  generate-nginx-config:
+    internal: true
+    cmds:
+      - |
+        echo "⚙️  Generating Nginx configuration..."
+        mkdir -p infrastructure/nginx/sites-enabled
+        
+        cat > infrastructure/nginx/nginx.conf << 'EOF'
+        events {
+          worker_connections 1024;
+        }
+        
+        http {
+          include /etc/nginx/mime.types;
+          default_type application/octet-stream;
+          
+          # Main app
+          upstream app {
+            server app:3000;
+          }
+          
+          # Supabase Studio
+          upstream studio {
+            server studio:3000;
+          }
+          
+          server {
+            listen 80;
+            server_name localhost;
+            
+            location / {
+              proxy_pass http://app;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+            }
+            
+            location /studio {
+              proxy_pass http://studio/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+            }
+          }
+          
+          server {
+            listen 443 ssl;
+            server_name localhost;
+            
+            ssl_certificate /etc/nginx/ssl/localhost.crt;
+            ssl_certificate_key /etc/nginx/ssl/localhost.key;
+            
+            location / {
+              proxy_pass http://app;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+            }
+          }
+        }
+        EOF
+        
+        echo "✅ Nginx configuration generated"
+
+  generate-prometheus-config:
+    internal: true
+    cmds:
+      - |
+        echo "⚙️  Generating Prometheus configuration..."
+        
+        cat > infrastructure/prometheus/prometheus.yml << 'EOF'
+        global:
+          scrape_interval: 15s
+          evaluation_interval: 15s
+        
+        scrape_configs:
+          - job_name: 'app'
+            static_configs:
+              - targets: ['app:3000']
+          
+          - job_name: 'database'
+            static_configs:
+              - targets: ['db:5432']
+          
+          - job_name: 'redis'
+            static_configs:
+              - targets: ['redis:6379']
+          
+          - job_name: 'nginx'
+            static_configs:
+              - targets: ['proxy:80']
+        
+        rule_files:
+          - "agent-alerts.yml"
+        EOF
+        
+        echo "✅ Prometheus configuration generated"
+
+  generate-grafana-config:
+    internal: true
+    cmds:
+      - |
+        echo "⚙️  Generating Grafana configuration..."
+        mkdir -p infrastructure/grafana/{dashboards,datasources}
+        
+        # Datasource configuration
+        cat > infrastructure/grafana/datasources/prometheus.yml << 'EOF'
+        apiVersion: 1
+        
+        datasources:
+          - name: Prometheus
+            type: prometheus
+            access: proxy
+            url: http://prometheus:9090
+            isDefault: true
+        EOF
+        
+        # Dashboard provisioning
+        cat > infrastructure/grafana/dashboards/dashboard.yml << 'EOF'
+        apiVersion: 1
+        
+        providers:
+          - name: 'default'
+            orgId: 1
+            folder: ''
+            type: file
+            disableDeletion: false
+            updateIntervalSeconds: 10
+            options:
+              path: /etc/grafana/provisioning/dashboards
+        EOF
+        
+        echo "✅ Grafana configuration generated"
+
+  # 🐳 Container Management
+  start-containers:
+    internal: true
+    cmds:
+      - |
+        echo "🚀 Starting containers..."
+        
+        # Pull latest images
+        docker-compose -f {{.COMPOSE_FILE}} pull --ignore-pull-failures
+        
+        # Start containers
+        docker-compose -f {{.COMPOSE_FILE}} up -d --build
+        
+        echo "✅ Containers started"
+
+  wait-healthy:
+    internal: true
+    cmds:
+      - |
+        echo "⏳ Waiting for services to be healthy..."
+        
+        # Wait for essential services
+        SERVICES="db redis"
+        
+        for service in $SERVICES; do
+          echo "   Waiting for $service..."
+          for i in $(seq 1 30); do
+            if docker-compose -f {{.COMPOSE_FILE}} exec -T $service echo "healthy" >/dev/null 2>&1; then
+              echo "   ✅ $service is ready"
+              break
+            fi
+            
+            if [ $i -eq 30 ]; then
+              echo "   ⚠️  $service timeout (may still be starting)"
+            fi
+            
+            sleep 2
+          done
+        done
+        
+        # Check application health
+        echo "   Waiting for application..."
+        for i in $(seq 1 60); do
+          if curl -sf http://localhost:${APP_PORT:-3000}/api/health >/dev/null 2>&1; then
+            echo "   ✅ Application is ready"
+            break
+          fi
+          
+          if [ $i -eq 60 ]; then
+            echo "   ⚠️  Application timeout (check logs with: task infra:logs)"
+          fi
+          
+          sleep 2
+        done
+
+  # 📊 Status and Health
+  status:
+    desc: "Show infrastructure status"
+    cmds:
+      - echo "📊 Infrastructure Status"
+      - echo "======================="
+      - docker-compose -f {{.COMPOSE_FILE}} ps
+      - echo ""
+      - task: health
+
+  health:
+    desc: "Check infrastructure health"
+    cmds:
+      - echo "🏥 Infrastructure Health Check"
+      - echo "============================"
+      - task: health-docker
+      - task: health-services
+      - task: health-database
+
+  health-docker:
+    internal: true
+    cmds:
+      - |
+        echo "🐳 Docker Health:"
+        if docker info >/dev/null 2>&1; then
+          echo "   ✅ Docker daemon: Running"
+          echo "   📊 Containers: $(docker ps -q | wc -l) running"
+          echo "   💾 Images: $(docker images -q | wc -l) cached"
+          echo "   🌐 Networks: $(docker network ls -q | wc -l) total"
+        else
+          echo "   ❌ Docker daemon: Not running"
+        fi
+
+  health-services:
+    internal: true
+    cmds:
+      - |
+        echo "🚀 Service Health:"
+        
+        # Check main application
+        if curl -sf http://localhost:${APP_PORT:-3000}/api/health >/dev/null 2>&1; then
+          echo "   ✅ Application: Healthy (http://localhost:${APP_PORT:-3000})"
+        else
+          echo "   ❌ Application: Not responding"
+        fi
+        
+        # Check Grafana
+        if curl -sf http://localhost:3001 >/dev/null 2>&1; then
+          echo "   ✅ Grafana: Available (http://localhost:3001)"
+        else
+          echo "   ⚠️  Grafana: Not responding"
+        fi
+        
+        # Check Prometheus
+        if curl -sf http://localhost:9090/-/healthy >/dev/null 2>&1; then
+          echo "   ✅ Prometheus: Healthy (http://localhost:9090)"
+        else
+          echo "   ⚠️  Prometheus: Not responding"
+        fi
+
+  health-database:
+    internal: true
+    cmds:
+      - |
+        echo "🗄️  Database Health:"
+        
+        # Check PostgreSQL
+        if docker-compose -f {{.COMPOSE_FILE}} exec -T db pg_isready -U ${POSTGRES_USER:-postgres} >/dev/null 2>&1; then
+          echo "   ✅ PostgreSQL: Ready"
+        else
+          echo "   ❌ PostgreSQL: Not ready"
+        fi
+        
+        # Check Redis
+        if docker-compose -f {{.COMPOSE_FILE}} exec -T redis redis-cli ping >/dev/null 2>&1; then
+          echo "   ✅ Redis: Responding"
+        else
+          echo "   ❌ Redis: Not responding"
+        fi
+
+  # 📈 Monitoring and Metrics
+  metrics:
+    desc: "Show infrastructure metrics"
+    cmds:
+      - |
+        echo "📈 Infrastructure Metrics"
+        echo "========================"
+        
+        # Docker stats
+        echo "🐳 Container Resources:"
+        docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}" | head -10
+        
+        echo ""
+        echo "💾 Volume Usage:"
+        docker system df -v | grep -A 20 "Local Volumes" | head -10 || echo "   No volume data available"
+
+  # 📋 Logs
+  logs:
+    desc: "Show infrastructure logs"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f --tail=100 {{.CLI_ARGS}}
+
+  logs-app:
+    desc: "Show application logs only"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f --tail=100 app
+
+  logs-db:
+    desc: "Show database logs only"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f --tail=100 db
+
+  logs-errors:
+    desc: "Show error logs from all services"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs --tail=100 2>&1 | grep -i error || echo "No errors found in recent logs"
+
+  # 🧹 Maintenance
+  update:
+    desc: "Update infrastructure components"
+    cmds:
+      - echo "⬆️  Updating infrastructure..."
+      - docker-compose -f {{.COMPOSE_FILE}} pull
+      - task: restart
+      - echo "✅ Infrastructure updated"
+
+  backup:
+    desc: "Backup infrastructure data"
+    cmds:
+      - |
+        echo "💾 Backing up infrastructure data..."
+        BACKUP_DIR="backups/$(date +%Y%m%d-%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+        
+        # Backup database
+        if docker-compose -f {{.COMPOSE_FILE}} exec -T db pg_dump -U ${POSTGRES_USER:-postgres} ${POSTGRES_DB:-app_dev} > "$BACKUP_DIR/database.sql"; then
+          echo "✅ Database backup completed"
+        else
+          echo "⚠️  Database backup failed"
+        fi
+        
+        # Backup Redis
+        if docker-compose -f {{.COMPOSE_FILE}} exec -T redis redis-cli --rdb /data/backup.rdb >/dev/null; then
+          docker cp $(docker-compose -f {{.COMPOSE_FILE}} ps -q redis):/data/backup.rdb "$BACKUP_DIR/redis.rdb"
+          echo "✅ Redis backup completed"
+        else
+          echo "⚠️  Redis backup failed"
+        fi
+        
+        echo "📁 Backup saved to: $BACKUP_DIR"
+
+  clean:
+    desc: "Clean infrastructure (remove unused resources)"
+    cmds:
+      - echo "🧹 Cleaning infrastructure..."
+      - docker system prune -f
+      - docker volume prune -f
+      - echo "✅ Infrastructure cleaned"
+
+  # 🔧 Development Utilities
+  shell:
+    desc: "Open shell in application container"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} exec app sh
+
+  db-shell:
+    desc: "Open database shell"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} exec db psql -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-app_dev}
+
+  redis-shell:
+    desc: "Open Redis CLI"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} exec redis redis-cli
+
+  # 🌐 Network and Security
+  network-info:
+    desc: "Show network information"
+    cmds:
+      - |
+        echo "🌐 Network Information"
+        echo "====================="
+        
+        echo "Docker Networks:"
+        docker network ls
+        
+        echo ""
+        echo "Port Mappings:"
+        docker-compose -f {{.COMPOSE_FILE}} ps --services | while read -r service; do
+          ports=$(docker-compose -f {{.COMPOSE_FILE}} port "$service" 2>/dev/null | head -3)
+          if [ -n "$ports" ]; then
+            echo "  $service:"
+            echo "$ports" | sed 's/^/    /'
+          fi
+        done

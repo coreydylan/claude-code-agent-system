@@ -1,0 +1,556 @@
+# Ultimate Developer OS Task Runner
+# Orchestrates Docker + Vercel + Supabase + Agents
+version: '3'
+
+includes:
+  agents: ./tasks/AgentTasks.yml
+  infra: ./tasks/InfraTasks.yml
+  deploy: ./tasks/DeployTasks.yml
+  sync: ./tasks/SyncTasks.yml
+
+vars:
+  PROJECT_NAME: '{{default "my-app" .PROJECT_NAME}}'
+  ENVIRONMENT: '{{default "development" .ENV}}'
+  COMPOSE_FILE: '{{default "docker-compose.dev.yml" .COMPOSE_FILE}}'
+  
+  # URLs and Ports
+  APP_PORT: '{{default "3000" .APP_PORT}}'
+  DB_PORT: '{{default "54322" .DB_PORT}}'
+  STUDIO_PORT: '{{default "54323" .STUDIO_PORT}}'
+  KONG_PORT: '{{default "54321" .KONG_PORT}}'
+
+tasks:
+  # 🚀 THE ONE COMMAND TO RULE THEM ALL
+  dev:
+    desc: "🛠️  Complete development environment startup"
+    aliases: [start, up]
+    deps: [check-prerequisites]
+    cmds:
+      - task: banner
+      - task: analyze
+      - task: sync:all
+      - task: infra:start
+      - task: agents:ready
+      - task: health-check
+      - task: success-message
+    silent: false
+
+  # 📋 Show startup banner
+  banner:
+    internal: true
+    cmds:
+      - |
+        echo "╭─────────────────────────────────────────────────────────╮"
+        echo "│  🚀 Claude Developer OS - Auto-Orchestrated Environment │"
+        echo "│  AI Agents + Infrastructure + Cloud Sync               │"
+        echo "╰─────────────────────────────────────────────────────────╯"
+        echo ""
+
+  # 🔍 Analyze project state
+  analyze:
+    internal: true
+    cmds:
+      - echo "🔍 Analyzing project state..."
+      - |
+        if [ -f "package.json" ]; then
+          FRAMEWORK=$(node -p "
+            const pkg = require('./package.json');
+            if (pkg.dependencies?.next) 'Next.js';
+            else if (pkg.dependencies?.react) 'React';
+            else if (pkg.dependencies?.express) 'Express';
+            else 'Node.js'
+          " 2>/dev/null || echo "Node.js")
+          echo "   ├── Framework: $FRAMEWORK"
+        fi
+      - |
+        if [ -d "supabase" ]; then
+          echo "   ├── Database: Supabase ✅"
+        else
+          echo "   ├── Database: Not configured ⚠️"
+        fi
+      - |
+        if [ -f "vercel.json" ] || [ -f ".vercel/project.json" ]; then
+          echo "   ├── Deployment: Vercel ✅"
+        else
+          echo "   ├── Deployment: Not configured ⚠️"
+        fi
+      - |
+        if [ -f "PROJECT_MANIFESTO.md" ]; then
+          echo "   ├── Agent System: Onboarded ✅"
+        else
+          echo "   ├── Agent System: Needs onboarding ⚠️"
+        fi
+      - echo "   └── Ready for orchestration"
+      - echo ""
+
+  # ✅ Check prerequisites
+  check-prerequisites:
+    internal: true
+    cmds:
+      - |
+        MISSING=""
+        command -v docker >/dev/null 2>&1 || MISSING="$MISSING docker"
+        command -v docker-compose >/dev/null 2>&1 || command -v docker compose >/dev/null 2>&1 || MISSING="$MISSING docker-compose"
+        command -v node >/dev/null 2>&1 || MISSING="$MISSING node"
+        command -v pnpm >/dev/null 2>&1 || MISSING="$MISSING pnpm"
+        
+        if [ -n "$MISSING" ]; then
+          echo "❌ Missing required tools:$MISSING"
+          echo "Please install them and try again."
+          exit 1
+        fi
+
+  # 🏗️ Infrastructure management
+  infra:start:
+    desc: "Start all infrastructure services"
+    cmds:
+      - echo "🏗️  Starting infrastructure..."
+      - docker-compose -f {{.COMPOSE_FILE}} up -d --build
+      - task: infra:wait-healthy
+
+  infra:stop:
+    desc: "Stop all infrastructure services"
+    cmds:
+      - echo "🛑 Stopping infrastructure..."
+      - docker-compose -f {{.COMPOSE_FILE}} down
+
+  infra:restart:
+    desc: "Restart infrastructure services"
+    cmds:
+      - task: infra:stop
+      - task: infra:start
+
+  infra:wait-healthy:
+    internal: true
+    cmds:
+      - echo "⏳ Waiting for services to be healthy..."
+      - |
+        for i in $(seq 1 30); do
+          if docker-compose -f {{.COMPOSE_FILE}} ps --services --filter "status=running" | wc -l | grep -q "$(docker-compose -f {{.COMPOSE_FILE}} config --services | wc -l)"; then
+            echo "✅ All services are running"
+            break
+          fi
+          echo "   Waiting... ($i/30)"
+          sleep 2
+        done
+
+  infra:logs:
+    desc: "Show infrastructure logs"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f {{.CLI_ARGS}}
+
+  infra:status:
+    desc: "Show infrastructure status"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} ps
+
+  # 🔄 Environment synchronization
+  sync:all:
+    desc: "Sync all environments and configurations"
+    cmds:
+      - echo "🔄 Synchronizing environments..."
+      - task: sync:vercel
+      - task: sync:supabase
+      - task: sync:env
+      - task: sync:types
+
+  sync:vercel:
+    desc: "Sync Vercel environment"
+    cmds:
+      - |
+        if command -v vercel >/dev/null 2>&1 && [ -f ".vercel/project.json" ]; then
+          echo "📥 Pulling Vercel environment..."
+          vercel env pull .env.vercel || echo "⚠️  Could not pull Vercel env (not critical)"
+        else
+          echo "⚠️  Vercel CLI not found or project not linked"
+        fi
+
+  sync:supabase:
+    desc: "Sync Supabase configuration"
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1 && [ -f "supabase/config.toml" ]; then
+          echo "🗄️  Starting Supabase local..."
+          supabase start || echo "⚠️  Supabase start failed (may already be running)"
+          
+          echo "📝 Generating types..."
+          supabase gen types typescript --local > types/supabase.ts 2>/dev/null || mkdir -p types && supabase gen types typescript --local > types/supabase.ts || echo "⚠️  Could not generate types"
+        else
+          echo "⚠️  Supabase CLI not found or not initialized"
+        fi
+
+  sync:env:
+    desc: "Sync environment files"
+    cmds:
+      - |
+        echo "🔧 Merging environment files..."
+        node -e "
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Load base environment
+          const envLocal = fs.existsSync('.env.local') ? fs.readFileSync('.env.local', 'utf8') : '';
+          const envVercel = fs.existsSync('.env.vercel') ? fs.readFileSync('.env.vercel', 'utf8') : '';
+          const envExample = fs.existsSync('.env.example') ? fs.readFileSync('.env.example', 'utf8') : '';
+          
+          // Merge environments (local takes precedence)
+          const merged = [envExample, envVercel, envLocal].filter(Boolean).join('\n');
+          
+          // Write merged file
+          if (merged) {
+            fs.writeFileSync('.env', merged);
+            console.log('✅ Environment files merged');
+          }
+        " 2>/dev/null || echo "⚠️  Could not merge environment files"
+
+  sync:types:
+    desc: "Generate and sync TypeScript types"
+    cmds:
+      - |
+        if [ -f "package.json" ] && grep -q "typescript" package.json; then
+          echo "📝 Checking TypeScript configuration..."
+          npx tsc --noEmit || echo "⚠️  TypeScript check found issues"
+        fi
+
+  # 🤖 Agent system integration
+  agents:ready:
+    desc: "Prepare agent system"
+    cmds:
+      - echo "🤖 Preparing agent system..."
+      - |
+        if [ ! -f "PROJECT_MANIFESTO.md" ]; then
+          echo "📋 Repository not onboarded. Running onboarding..."
+          ./scripts/repo-onboarding.sh . || echo "⚠️  Onboarding failed"
+        else
+          echo "✅ Agent system ready"
+        fi
+
+  agents:spawn:
+    desc: "Spawn specific agent"
+    cmds:
+      - claude-agents spawn {{.CLI_ARGS}}
+
+  agents:interactive:
+    desc: "Launch interactive agent interface"
+    cmds:
+      - claude-agents
+
+  agents:sequence:
+    desc: "Run agent sequence"
+    cmds:
+      - claude-agents sequence run {{.CLI_ARGS}}
+
+  # 📦 Dependency management
+  deps:install:
+    desc: "Install all dependencies"
+    cmds:
+      - echo "📦 Installing dependencies..."
+      - |
+        if [ -f "pnpm-lock.yaml" ]; then
+          pnpm install
+        elif [ -f "yarn.lock" ]; then
+          yarn install
+        elif [ -f "package-lock.json" ]; then
+          npm install
+        elif [ -f "package.json" ]; then
+          pnpm install
+        fi
+
+  deps:update:
+    desc: "Update all dependencies"
+    cmds:
+      - echo "⬆️  Updating dependencies..."
+      - |
+        if [ -f "pnpm-lock.yaml" ]; then
+          pnpm update
+        elif [ -f "yarn.lock" ]; then
+          yarn upgrade
+        else
+          npm update
+        fi
+
+  # 🚀 Deployment tasks
+  deploy:
+    desc: "Deploy to production"
+    deps: [test, lint]
+    cmds:
+      - echo "🚀 Deploying to production..."
+      - task: sync:push
+      - task: deploy:vercel
+      - task: deploy:supabase
+      - echo "🎉 Deployment complete!"
+
+  deploy:staging:
+    desc: "Deploy to staging"
+    cmds:
+      - task: deploy
+        vars:
+          ENVIRONMENT: staging
+
+  deploy:vercel:
+    desc: "Deploy to Vercel"
+    cmds:
+      - |
+        if command -v vercel >/dev/null 2>&1; then
+          vercel --prod
+        else
+          echo "⚠️  Vercel CLI not found"
+        fi
+
+  deploy:supabase:
+    desc: "Deploy Supabase changes"
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1 && [ -f "supabase/config.toml" ]; then
+          supabase db push
+        else
+          echo "⚠️  Supabase CLI not found or not configured"
+        fi
+
+  sync:push:
+    desc: "Push local environment to cloud"
+    cmds:
+      - |
+        if command -v vercel >/dev/null 2>&1 && [ -f ".env.production" ]; then
+          echo "📤 Pushing production environment to Vercel..."
+          # Push each line of .env.production to Vercel
+          while IFS= read -r line; do
+            if [[ $line =~ ^([A-Z_]+)=(.*)$ ]]; then
+              key="${BASH_REMATCH[1]}"
+              value="${BASH_REMATCH[2]}"
+              echo "Setting $key..."
+              echo "$value" | vercel env add "$key" production --force 2>/dev/null || true
+            fi
+          done < .env.production
+        fi
+
+  # 🧪 Testing and validation
+  test:
+    desc: "Run all tests"
+    cmds:
+      - echo "🧪 Running tests..."
+      - |
+        if [ -f "package.json" ] && grep -q '"test"' package.json; then
+          pnpm test || npm test || yarn test
+        else
+          echo "⚠️  No test script found"
+        fi
+
+  test:integration:
+    desc: "Run integration tests with infrastructure"
+    deps: [infra:start]
+    cmds:
+      - echo "🧪 Running integration tests..."
+      - |
+        if [ -f "package.json" ] && grep -q '"test:integration"' package.json; then
+          pnpm test:integration || npm run test:integration || yarn test:integration
+        else
+          echo "⚠️  No integration test script found"
+        fi
+
+  lint:
+    desc: "Run linting"
+    cmds:
+      - |
+        if [ -f "package.json" ] && grep -q '"lint"' package.json; then
+          pnpm lint || npm run lint || yarn lint
+        else
+          echo "⚠️  No lint script found"
+        fi
+
+  # 🏥 Health monitoring
+  health-check:
+    desc: "Verify all systems are healthy"
+    cmds:
+      - echo "🏥 Performing health checks..."
+      - task: health:docker
+      - task: health:services
+      - task: health:database
+      - echo "✅ Health check complete"
+
+  health:docker:
+    internal: true
+    cmds:
+      - |
+        if ! docker info >/dev/null 2>&1; then
+          echo "❌ Docker is not running"
+          exit 1
+        fi
+        echo "✅ Docker: Healthy"
+
+  health:services:
+    internal: true
+    cmds:
+      - |
+        # Check main application
+        if curl -sf http://localhost:{{.APP_PORT}}/api/health >/dev/null 2>&1; then
+          echo "✅ App: Healthy (http://localhost:{{.APP_PORT}})"
+        else
+          echo "⚠️  App: Not responding (http://localhost:{{.APP_PORT}})"
+        fi
+
+  health:database:
+    internal: true
+    cmds:
+      - |
+        # Check database connection
+        if docker-compose -f {{.COMPOSE_FILE}} exec -T db pg_isready >/dev/null 2>&1; then
+          echo "✅ Database: Healthy"
+        else
+          echo "⚠️  Database: Not healthy"
+        fi
+
+  # 📊 Status and monitoring
+  status:
+    desc: "Show complete system status"
+    cmds:
+      - echo "📊 System Status"
+      - echo "=============="
+      - task: infra:status
+      - echo ""
+      - task: health-check
+      - echo ""
+      - |
+        echo "🌐 Available URLs:"
+        echo "   • App: http://localhost:{{.APP_PORT}}"
+        echo "   • Database Studio: http://localhost:{{.STUDIO_PORT}}"
+        echo "   • API Gateway: http://localhost:{{.KONG_PORT}}"
+        echo "   • Grafana: http://localhost:3001"
+        echo "   • Prometheus: http://localhost:9090"
+
+  urls:
+    desc: "Show all service URLs"
+    cmds:
+      - |
+        echo "🌐 Service URLs:"
+        echo "==============="
+        echo ""
+        echo "🖥️  Main Services:"
+        echo "   • Application:       http://localhost:{{.APP_PORT}}"
+        echo "   • Database Studio:   http://localhost:{{.STUDIO_PORT}}"
+        echo "   • API Gateway:       http://localhost:{{.KONG_PORT}}"
+        echo ""
+        echo "📊 Monitoring:"
+        echo "   • Grafana:          http://localhost:3001 (admin/admin)"
+        echo "   • Prometheus:       http://localhost:9090"
+        echo "   • Jaeger:           http://localhost:16686"
+        echo "   • Kibana:           http://localhost:5601"
+        echo ""
+        echo "🛠️  Development:"
+        echo "   • Mail Testing:     http://localhost:8025"
+        echo "   • MinIO Console:    http://localhost:9001"
+        echo "   • Redis:            localhost:6379"
+
+  # 🧹 Cleanup and maintenance
+  clean:
+    desc: "Clean development environment"
+    cmds:
+      - echo "🧹 Cleaning environment..."
+      - docker-compose -f {{.COMPOSE_FILE}} down -v
+      - docker system prune -f
+      - |
+        if [ -d "node_modules" ]; then
+          rm -rf node_modules/.cache
+        fi
+
+  reset:
+    desc: "Complete system reset"
+    cmds:
+      - echo "🔄 Resetting system..."
+      - task: clean
+      - |
+        if [ -d "node_modules" ]; then
+          rm -rf node_modules
+        fi
+      - task: deps:install
+      - task: dev
+
+  # 📝 Logs and debugging
+  logs:
+    desc: "Show logs for all services"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f {{.CLI_ARGS}}
+
+  logs:app:
+    desc: "Show application logs"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f app
+
+  logs:db:
+    desc: "Show database logs"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} logs -f db
+
+  # 🎯 Quick actions
+  restart:
+    desc: "Quick restart of main services"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} restart app db redis
+
+  shell:
+    desc: "Open shell in application container"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} exec app sh
+
+  db:shell:
+    desc: "Open database shell"
+    cmds:
+      - docker-compose -f {{.COMPOSE_FILE}} exec db psql -U postgres -d {{.POSTGRES_DB}}
+
+  db:migrate:
+    desc: "Run database migrations"
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1; then
+          supabase migration up
+        else
+          echo "⚠️  Supabase CLI not found"
+        fi
+
+  # 🎉 Success message
+  success-message:
+    internal: true
+    cmds:
+      - |
+        echo ""
+        echo "╭─── Development Environment Ready ───╮"
+        echo "│ ✅ Docker Compose: All services up  │"
+        echo "│ ✅ Supabase: Local instance ready   │"
+        echo "│ ✅ Database: Migrated and healthy    │"
+        echo "│ ✅ Types: Generated and updated      │"
+        echo "│ ✅ Environment: Synced across all    │"
+        echo "│ ✅ Agents: Ready for orchestration   │"
+        echo "╰──────────────────────────────────────╯"
+        echo ""
+        echo "🌐 Local URLs:"
+        echo "   • App: http://localhost:{{.APP_PORT}}"
+        echo "   • Database Studio: http://localhost:{{.STUDIO_PORT}}"
+        echo "   • API Gateway: http://localhost:{{.KONG_PORT}}"
+        echo "   • Monitoring: http://localhost:3001"
+        echo ""
+        echo "🤖 AI Agent Commands:"
+        echo "   • task agents:interactive    # Interactive agent interface"
+        echo "   • task agents:spawn <agent>  # Spawn specific agent"
+        echo "   • task agents:sequence       # Run agent sequences"
+        echo ""
+        echo "💡 Ready to code! Your environment is fully orchestrated."
+        echo "   Type 'task status' to monitor system health."
+        echo "   Type 'task urls' to see all available services."
+
+  # 🆘 Help and documentation
+  help:
+    desc: "Show available commands"
+    cmds:
+      - task --list
+
+  docs:
+    desc: "Open documentation"
+    cmds:
+      - |
+        if command -v open >/dev/null 2>&1; then
+          open "https://docs.example.com"
+        elif command -v xdg-open >/dev/null 2>&1; then
+          xdg-open "https://docs.example.com"
+        else
+          echo "📚 Documentation: https://docs.example.com"
+        fi

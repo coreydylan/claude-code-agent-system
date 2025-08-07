@@ -10,6 +10,19 @@ A suite of specialized Claude Code agents that transform raw ideas into producti
 
 ## Phase 0: Infrastructure Agents
 
+### 0. `repo-onboarding-agent`
+
+**Purpose**: Universal repository analysis and agent system integration
+**Triggers**: Manual invocation on existing repositories (Pre-Phase 0)
+**Capabilities**:
+
+- Deep repository analysis (file structure, tech stack, patterns)
+- Agent system integration without disruption
+- Creates AGENT_COMPATIBILITY_MAP.md for repo-specific guidelines
+- Sets up agent infrastructure respecting existing patterns
+- Generates project manifesto based on discovered patterns
+- Outputs: Complete agent system integration for any repository
+
 ### 1. `journal-interface-builder`
 
 **Purpose**: Create human-readable dashboard for monitoring agents
@@ -272,11 +285,25 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Validates linting rules
 - Blocks progress if tests fail
 
+### 19. `folder-documenter`
+
+**Purpose**: Generate comprehensive folder documentation
+**Triggers**: Automatic activation when agents complete work in a folder
+**Capabilities**:
+
+- Complete folder analysis and mapping
+- Documents all functions, integrations, and data flows
+- Maps error handling mechanisms and kill switches
+- Creates detailed README.md for each folder
+- Documents cross-folder relationships and dependencies
+- Provides troubleshooting and maintenance guides
+- Outputs: Comprehensive folder documentation with rundowns
+
 ---
 
 ## Phase 6: Admin & DevOps Agents
 
-### 19. `admin-console-builder`
+### 20. `admin-console-builder`
 
 **Purpose**: Create self-managing admin interface
 **Triggers**: Phase 3-4
@@ -288,7 +315,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Adds system health checks
 - Outputs: Complete `/admin` interface
 
-### 20. `setup-wizard-creator`
+### 21. `setup-wizard-creator`
 
 **Purpose**: Build zero-friction onboarding
 **Triggers**: Phase 3-4
@@ -300,7 +327,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Adds first-run detection
 - Outputs: Complete `/setup` flow
 
-### 21. `devops-automator`
+### 22. `devops-automator`
 
 **Purpose**: Automate deployment and operations
 **Triggers**: Phase 6
@@ -316,7 +343,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 
 ## Phase 7: Service Deployment Agents
 
-### 22. `service-analyzer`
+### 23. `service-analyzer`
 
 **Purpose**: Analyze project requirements and determine needed external services
 **Triggers**: After stack-analyzer completes
@@ -328,7 +355,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Compares pricing and features
 - Outputs: `PROJECT_SERVICES.md` with recommendations
 
-### 23. `stripe-deployer`
+### 24. `stripe-deployer`
 
 **Purpose**: Fully configure and deploy Stripe payment processing
 **Triggers**: When payment processing is required
@@ -343,7 +370,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Creates test data and cards
 - Outputs: Complete Stripe integration
 
-### 24. `clerk-deployer`
+### 25. `clerk-deployer`
 
 **Purpose**: Deploy and configure Clerk authentication
 **Triggers**: When auth is required
@@ -358,7 +385,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Configures webhooks
 - Outputs: Complete Clerk auth system
 
-### 25. `email-deployer`
+### 26. `email-deployer`
 
 **Purpose**: Set up email service (Resend/Sendgrid/Postmark)
 **Triggers**: When email is required
@@ -373,7 +400,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Implements sending logic
 - Outputs: Complete email system
 
-### 26. `database-deployer`
+### 27. `database-deployer`
 
 **Purpose**: Deploy and configure database services
 **Triggers**: Early in stack setup
@@ -387,7 +414,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 - Configures row-level security
 - Outputs: Production-ready database
 
-### 27. `monitoring-deployer`
+### 28. `monitoring-deployer`
 
 **Purpose**: Set up monitoring and analytics
 **Triggers**: Before production
@@ -405,7 +432,7 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 
 ## Phase 8: Error Management Agents
 
-### 28. `error-manager`
+### 29. `error-manager`
 
 **Purpose**: Specialized agent for resolving stuck/errored tasks
 **Triggers**: When any agent sets status to 'error' or 'needs-review'
@@ -425,7 +452,8 @@ Output: Refined concept focusing on demand-driven ingestion, ghost matrix patter
 
 ```mermaid
 graph TD
-    A[Raw Idea] --> JI[journal-interface-builder]
+    A[Raw Idea] --> ROA[repo-onboarding-agent]
+    ROA --> JI[journal-interface-builder]
     JI --> B[vision-challenger]
     B --> MG[manifesto-generator]
     MG --> C[prd-generator]
@@ -451,9 +479,10 @@ graph TD
     L --> N[task-executor]
     N --> O[vertical-slice-builder]
     O --> P[test-guardian]
+    P --> FD[folder-documenter]
 
-    P --> Q[admin-console-builder]
-    P --> R[setup-wizard-creator]
+    FD --> Q[admin-console-builder]
+    FD --> R[setup-wizard-creator]
     Q --> S[devops-automator]
 
     B -.-> T[journal-keeper]
@@ -465,10 +494,18 @@ graph TD
     O -.-> EM
     SD -.-> EM
     CD -.-> EM
+    FD -.-> EM
 
+    N -.-> FD
+    Q -.-> FD
+    R -.-> FD
+    S -.-> FD
+
+    style ROA fill:#e1f5fe,stroke:#333,stroke-width:4px
     style JI fill:#4CAF50,stroke:#333,stroke-width:4px
     style MG fill:#ffeb3b,stroke:#333,stroke-width:4px
     style F fill:#f9f,stroke:#333,stroke-width:4px
+    style FD fill:#e8f5e8,stroke:#333,stroke-width:4px
     style EM fill:#f99,stroke:#333,stroke-width:4px
 ```
 
@@ -601,25 +638,33 @@ claude> /agents retry vertical-slice-builder --fix "Update DATABASE_URL"
 
 ## Time Estimates
 
-### Sprint 1: Planning & Setup (Agents 1-13, 20-25)
+### Pre-Sprint: Repository Integration (Agent 0)
+
+- **Human Time**: 15-30 minutes for initial invocation
+- **Agent Time**: 30-60 minutes for deep analysis and integration
+- **Repository Preparation**: Any existing repo becomes agent-ready
+- **Duration**: 1-2 hours total for full onboarding
+
+### Sprint 1: Planning & Setup (Agents 1-14, 23-28)
 
 - **Human Time**: 2-3 hours of input/review
 - **Agent Time**: 18-24 hours of generation
 - **Service Setup**: 4-6 hours for external services
 - **Sprint Duration**: 1-2 days parallel execution
 
-### Sprint 2: Execution & Delivery (Agents 14-19)
+### Sprint 2: Execution & Delivery (Agents 15-22)
 
 - **Human Time**: 4-6 hours of verification
 - **Agent Time**: 40-60 hours of building
+- **Documentation**: Continuous folder documentation generation
 - **Error Resolution**: 2-4 hours as needed
 - **Sprint Duration**: 3-5 days with parallel agents
 
-### Continuous: Error Management (Agent 26)
+### Continuous: Error Management & Documentation (Agents 19, 29)
 
-- **Triggers**: On any agent error/stuck state
-- **Resolution Time**: 15-30 minutes per issue
-- **Escalation**: Human intervention if not auto-resolved
+- **folder-documenter**: Triggers on folder completion, 15-30 minutes per folder
+- **error-manager**: Triggers on any agent error/stuck state, 15-30 minutes per issue
+- **Human Escalation**: Only if automated resolution fails
 
 ### Total: Concept → Production
 
