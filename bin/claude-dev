@@ -2,12 +2,33 @@
 
 const { Command } = require('commander');
 const chalk = require('chalk');
-const inquirer = require('inquirer');
+const readline = require('readline');
 const { execSync } = require('child_process');
 const { existsSync } = require('fs');
 const { join } = require('path');
 
 const program = new Command();
+
+// Simple prompt replacement for inquirer
+function promptUser(question, defaultValue = true) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    
+    const defaultText = defaultValue ? ' (Y/n)' : ' (y/N)';
+    rl.question(question + defaultText + ': ', (answer) => {
+      rl.close();
+      const result = answer.toLowerCase();
+      if (result === '') {
+        resolve(defaultValue);
+      } else {
+        resolve(result === 'y' || result === 'yes');
+      }
+    });
+  });
+}
 
 program
   .name('claude-dev')
@@ -77,14 +98,9 @@ program
         
         // Check if repo is onboarded
         if (!analysis.agentSystemReady) {
-          const shouldOnboard = await inquirer.prompt([{
-            type: 'confirm',
-            name: 'onboard',
-            message: 'Agent system not set up. Run repository onboarding?',
-            default: true
-          }]);
+          const shouldOnboard = await promptUser('Agent system not set up. Run repository onboarding?', true);
           
-          if (shouldOnboard.onboard) {
+          if (shouldOnboard) {
             try {
               if (existsSync('scripts/repo-onboarding.sh')) {
                 execSync('bash scripts/repo-onboarding.sh .', { stdio: 'inherit' });
