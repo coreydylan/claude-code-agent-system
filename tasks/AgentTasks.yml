@@ -5,7 +5,7 @@ version: '3'
 
 vars:
   AGENT_WORKSPACE: '{{default "." .AGENT_WORKSPACE}}'
-  CLAUDE_API_KEY: '{{.CLAUDE_API_KEY}}'
+  # CLAUDE_API_KEY will be read from environment
 
 tasks:
   # 🤖 Agent System Management

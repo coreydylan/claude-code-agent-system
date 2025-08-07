@@ -295,7 +295,7 @@ services:
       - .:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      # - CLAUDE_API_KEY=${CLAUDE_API_KEY}  # Set in .env if needed
       - AGENT_WORKSPACE=/workspace
       - DOCKER_HOST=unix:///var/run/docker.sock
     depends_on:
