@@ -1,0 +1,67 @@
+{
+  "queue": {
+    "name": "feature-dev",
+    "description": "Feature development and enhancements",
+    "sla_hours": 120,
+    "auto_assign": true,
+    "escalation_minutes": 1440,
+    "max_concurrent": 10,
+    "priority_weight": 75
+  },
+  "tasks": [
+    {
+      "id": "sample-feature-001",
+      "title": "Sample Feature Request",
+      "description": "This is a template for feature development tasks",
+      "status": "template",
+      "priority": "medium",
+      "created_at": "2024-01-01T00:00:00Z",
+      "sla_deadline": "2024-01-06T00:00:00Z",
+      "assigned_agent": null,
+      "requester": "system",
+      "business_impact": "medium",
+      "technical_risk": "low",
+      "estimated_effort_hours": 16,
+      "tags": ["template", "feature"],
+      "dependencies": [],
+      "acceptance_criteria": [
+        "Feature implemented according to specifications",
+        "Tests written and passing",
+        "Code reviewed and approved",
+        "Documentation updated"
+      ],
+      "roadmap_milestone": "v1.1.0"
+    }
+  ],
+  "metrics": {
+    "total_tasks": 0,
+    "completed_tasks": 0,
+    "average_cycle_time_hours": 0,
+    "sla_compliance_rate": 100,
+    "current_load": 0,
+    "velocity_features_per_week": 0
+  },
+  "agents": {
+    "preferred": ["task-executor", "architecture-designer", "ui-specialist", "api-builder"],
+    "available": [],
+    "busy": []
+  },
+  "workflow": {
+    "stages": [
+      "requirements_analysis",
+      "technical_design", 
+      "implementation",
+      "testing",
+      "code_review",
+      "deployment"
+    ],
+    "agent_assignments": {
+      "requirements_analysis": "vision-challenger",
+      "technical_design": "architecture-designer",
+      "implementation": "task-executor",
+      "testing": "test-guardian",
+      "code_review": "security-auditor",
+      "deployment": "deployment-manager"
+    }
+  }
+}

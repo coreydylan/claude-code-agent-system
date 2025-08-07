@@ -1,0 +1,343 @@
+# Queue Management Tasks
+# Integration with product management agents
+
+version: '3'
+
+vars:
+  QUEUES_DIR: '{{default "./QUEUES" .QUEUES_DIR}}'
+  ADMIN_AGENT: 'admin-dashboard-agent'
+  QUEUE_AGENT: 'queue-manager'
+
+tasks:
+  # 📊 Queue Status and Monitoring
+  status:
+    desc: "Show all queue status"
+    cmds:
+      - echo "📊 Queue System Status"
+      - echo "===================="
+      - task: list-queues
+      - echo ""
+      - task: show-metrics
+      - echo ""
+      - task: check-sla
+
+  list-queues:
+    desc: "List all available queues"
+    cmds:
+      - |
+        echo "📋 Available Queues:"
+        if [ -d "{{.QUEUES_DIR}}" ]; then
+          for queue_file in {{.QUEUES_DIR}}/*.json; do
+            if [ -f "$queue_file" ]; then
+              queue_name=$(basename "$queue_file" .json)
+              active_count=$(jq -r '.tasks | map(select(.status != "template")) | length' "$queue_file" 2>/dev/null || echo "0")
+              sla_hours=$(jq -r '.queue.sla_hours' "$queue_file" 2>/dev/null || echo "N/A")
+              echo "   • $queue_name: $active_count active tasks (SLA: ${sla_hours}h)"
+            fi
+          done
+        else
+          echo "   ⚠️  Queue directory not found: {{.QUEUES_DIR}}"
+        fi
+
+  show:
+    desc: "Show specific queue details"
+    cmds:
+      - |
+        QUEUE_NAME="{{.CLI_ARGS}}"
+        if [ -z "$QUEUE_NAME" ]; then
+          echo "❌ Please specify a queue name"
+          echo "Usage: task queues:show -- <queue-name>"
+          exit 1
+        fi
+        
+        QUEUE_FILE="{{.QUEUES_DIR}}/${QUEUE_NAME}.json"
+        if [ ! -f "$QUEUE_FILE" ]; then
+          echo "❌ Queue not found: $QUEUE_NAME"
+          echo "Available queues:"
+          task queues:list-queues
+          exit 1
+        fi
+        
+        echo "📋 Queue: $QUEUE_NAME"
+        echo "========================="
+        
+        # Queue configuration
+        echo "🔧 Configuration:"
+        jq -r '.queue | "   SLA: \(.sla_hours) hours\n   Max Concurrent: \(.max_concurrent)\n   Auto-assign: \(.auto_assign)\n   Priority Weight: \(.priority_weight)"' "$QUEUE_FILE"
+        
+        echo ""
+        echo "📋 Active Tasks:"
+        jq -r '.tasks[] | select(.status != "template") | "   • \(.title) (\(.status)) - \(.priority)"' "$QUEUE_FILE" || echo "   No active tasks"
+        
+        echo ""
+        echo "📊 Metrics:"
+        jq -r '.metrics | "   Total: \(.total_tasks)\n   Completed: \(.completed_tasks)\n   Current Load: \(.current_load)\n   SLA Compliance: \(.sla_compliance_rate)%"' "$QUEUE_FILE"
+
+  show-metrics:
+    desc: "Show queue performance metrics"
+    cmds:
+      - |
+        echo "📊 Queue Performance Metrics:"
+        total_tasks=0
+        total_completed=0
+        total_overdue=0
+        
+        if [ -d "{{.QUEUES_DIR}}" ]; then
+          for queue_file in {{.QUEUES_DIR}}/*.json; do
+            if [ -f "$queue_file" ]; then
+              queue_name=$(basename "$queue_file" .json)
+              tasks=$(jq -r '.metrics.total_tasks // 0' "$queue_file")
+              completed=$(jq -r '.metrics.completed_tasks // 0' "$queue_file") 
+              sla_rate=$(jq -r '.metrics.sla_compliance_rate // 100' "$queue_file")
+              
+              total_tasks=$((total_tasks + tasks))
+              total_completed=$((total_completed + completed))
+              
+              echo "   • $queue_name: $completed/$tasks completed (${sla_rate}% SLA compliance)"
+            fi
+          done
+          
+          echo ""
+          echo "📈 Overall:"
+          echo "   • Total Tasks: $total_tasks"
+          echo "   • Completed: $total_completed"
+          if [ $total_tasks -gt 0 ]; then
+            completion_rate=$((total_completed * 100 / total_tasks))
+            echo "   • Completion Rate: ${completion_rate}%"
+          fi
+        fi
+
+  check-sla:
+    desc: "Check SLA compliance across all queues"  
+    cmds:
+      - |
+        echo "🚦 SLA Compliance Check:"
+        violations=0
+        
+        if [ -d "{{.QUEUES_DIR}}" ]; then
+          for queue_file in {{.QUEUES_DIR}}/*.json; do
+            if [ -f "$queue_file" ]; then
+              queue_name=$(basename "$queue_file" .json)
+              sla_rate=$(jq -r '.metrics.sla_compliance_rate // 100' "$queue_file")
+              
+              if [ "$sla_rate" -lt 95 ]; then
+                echo "   🔴 $queue_name: ${sla_rate}% compliance (VIOLATION)"
+                violations=$((violations + 1))
+              elif [ "$sla_rate" -lt 98 ]; then
+                echo "   🟡 $queue_name: ${sla_rate}% compliance (WARNING)"
+              else
+                echo "   🟢 $queue_name: ${sla_rate}% compliance"
+              fi
+            fi
+          done
+          
+          if [ $violations -gt 0 ]; then
+            echo ""
+            echo "⚠️  $violations queue(s) have SLA violations"
+            echo "   Consider running: task queues:rebalance"
+          else
+            echo ""
+            echo "✅ All queues meeting SLA targets"
+          fi
+        fi
+
+  # 🔄 Queue Operations
+  add:
+    desc: "Add task to queue"
+    cmds:
+      - |
+        echo "📝 Adding task to queue..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "🤖 Using feature-intake-agent to process task addition"
+          echo "Use the feature-intake-agent to add a new task" | claude --non-interactive
+        else
+          echo "⚠️  Manual task addition not implemented"
+          echo "   Install Claude Code CLI to use automated task processing"
+        fi
+
+  priority:
+    desc: "Change task priority"
+    cmds:
+      - |
+        TASK_INFO="{{.CLI_ARGS}}"
+        if [ -z "$TASK_INFO" ]; then
+          echo "❌ Please specify task ID and priority"
+          echo "Usage: task queues:priority -- task-123 high"
+          exit 1
+        fi
+        
+        echo "⚡ Changing task priority: $TASK_INFO"
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the queue-manager agent to change priority for $TASK_INFO" | claude --non-interactive
+        else
+          echo "⚠️  Priority changes require Claude Code CLI"
+        fi
+
+  assign:
+    desc: "Assign task to specific agent"
+    cmds:
+      - |
+        ASSIGNMENT="{{.CLI_ARGS}}"
+        if [ -z "$ASSIGNMENT" ]; then
+          echo "❌ Please specify task ID and agent"
+          echo "Usage: task queues:assign -- task-123 task-executor"
+          exit 1
+        fi
+        
+        echo "🎯 Assigning task: $ASSIGNMENT"
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the queue-manager agent to assign $ASSIGNMENT" | claude --non-interactive
+        else
+          echo "⚠️  Task assignment requires Claude Code CLI"
+        fi
+
+  rebalance:
+    desc: "Rebalance workload across agents"
+    cmds:
+      - |
+        echo "⚖️  Rebalancing queue workloads..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the queue-manager agent to rebalance all queue workloads" | claude --non-interactive
+        else
+          echo "⚠️  Workload rebalancing requires Claude Code CLI"
+        fi
+
+  escalate:
+    desc: "Emergency escalation for stuck tasks"
+    cmds:
+      - |
+        TASK_ID="{{.CLI_ARGS}}"
+        if [ -z "$TASK_ID" ]; then
+          echo "❌ Please specify task ID"
+          echo "Usage: task queues:escalate -- task-123"
+          exit 1
+        fi
+        
+        echo "🚨 Emergency escalation for: $TASK_ID"
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the admin-dashboard-agent to escalate $TASK_ID immediately" | claude --non-interactive
+        else
+          echo "⚠️  Emergency escalation requires Claude Code CLI"
+        fi
+
+  # 📈 Reporting
+  report:
+    desc: "Generate queue reports"
+    cmds:
+      - |
+        REPORT_TYPE="{{.CLI_ARGS}}"
+        if [ -z "$REPORT_TYPE" ]; then
+          REPORT_TYPE="daily"
+        fi
+        
+        echo "📈 Generating $REPORT_TYPE queue report..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the admin-dashboard-agent to generate a $REPORT_TYPE queue performance report" | claude --non-interactive  
+        else
+          echo "⚠️  Report generation requires Claude Code CLI"
+          echo "   Basic metrics available via: task queues:show-metrics"
+        fi
+
+  # 🏥 Health and Maintenance  
+  health:
+    desc: "Check queue system health"
+    cmds:
+      - echo "🏥 Queue System Health Check"
+      - echo "============================="
+      - task: check-sla
+      - echo ""
+      - task: check-agents
+      - echo ""
+      - task: check-capacity
+
+  check-agents:
+    desc: "Check agent availability"
+    cmds:
+      - |
+        echo "🤖 Agent Availability:"
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the admin-dashboard-agent to show current agent status and availability" | claude --non-interactive
+        else
+          echo "   ⚠️  Agent status requires Claude Code CLI"
+          echo "   All core agents should be available for task assignment"
+        fi
+
+  check-capacity:
+    desc: "Check queue capacity and load"
+    cmds:
+      - |
+        echo "📊 Queue Capacity Analysis:"
+        
+        if [ -d "{{.QUEUES_DIR}}" ]; then
+          for queue_file in {{.QUEUES_DIR}}/*.json; do
+            if [ -f "$queue_file" ]; then
+              queue_name=$(basename "$queue_file" .json)
+              current_load=$(jq -r '.metrics.current_load // 0' "$queue_file")
+              max_concurrent=$(jq -r '.queue.max_concurrent // 10' "$queue_file")
+              
+              if [ $current_load -ge $max_concurrent ]; then
+                echo "   🔴 $queue_name: $current_load/$max_concurrent (AT CAPACITY)"
+              elif [ $current_load -ge $((max_concurrent * 8 / 10)) ]; then
+                echo "   🟡 $queue_name: $current_load/$max_concurrent (HIGH LOAD)"
+              else
+                echo "   🟢 $queue_name: $current_load/$max_concurrent (NORMAL)"
+              fi
+            fi
+          done
+        fi
+
+  # 🧹 Maintenance
+  cleanup:
+    desc: "Clean up completed tasks"
+    cmds:
+      - |
+        echo "🧹 Cleaning up completed tasks..."
+        
+        if [ -d "{{.QUEUES_DIR}}" ]; then
+          for queue_file in {{.QUEUES_DIR}}/*.json; do
+            if [ -f "$queue_file" ]; then
+              queue_name=$(basename "$queue_file" .json)
+              # Archive completed tasks older than 30 days
+              echo "   Archiving old tasks from $queue_name..."
+            fi
+          done
+        fi
+        
+        echo "✅ Queue cleanup completed"
+
+  init:
+    desc: "Initialize queue system"
+    cmds:
+      - |
+        echo "🚀 Initializing queue system..."
+        
+        # Create queue directory if it doesn't exist
+        mkdir -p {{.QUEUES_DIR}}
+        
+        # Copy templates if they don't exist
+        if [ ! -f "{{.QUEUES_DIR}}/urgent.json" ] && [ -f "templates/QUEUES/urgent.json" ]; then
+          cp templates/QUEUES/urgent.json {{.QUEUES_DIR}}/urgent.json
+          echo "   ✅ Created urgent queue"
+        fi
+        
+        if [ ! -f "{{.QUEUES_DIR}}/feature-dev.json" ] && [ -f "templates/QUEUES/feature-dev.json" ]; then
+          cp templates/QUEUES/feature-dev.json {{.QUEUES_DIR}}/feature-dev.json
+          echo "   ✅ Created feature-dev queue"
+        fi
+        
+        # Initialize other queues
+        for queue in maintenance research admin; do
+          if [ ! -f "{{.QUEUES_DIR}}/$queue.json" ]; then
+            echo "{\"queue\":{\"name\":\"$queue\",\"sla_hours\":24,\"auto_assign\":true},\"tasks\":[],\"metrics\":{\"total_tasks\":0,\"completed_tasks\":0,\"sla_compliance_rate\":100}}" > "{{.QUEUES_DIR}}/$queue.json"
+            echo "   ✅ Created $queue queue"
+          fi
+        done
+        
+        echo "🎉 Queue system initialized successfully!"

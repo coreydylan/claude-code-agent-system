@@ -25,7 +25,7 @@ interface ProjectContext {
 }
 
 interface ActionChoice {
-  action: 'new_feature' | 'improve_code' | 'documentation' | 'refactor' | 'custom' | 'dashboard' | 'exit';
+  action: 'new_feature' | 'improve_code' | 'documentation' | 'refactor' | 'custom' | 'dashboard' | 'feature_request' | 'queue_management' | 'roadmap' | 'admin' | 'exit';
   description?: string;
 }
 
@@ -223,6 +223,28 @@ export class InteractiveOrchestrator {
         value: 'refactor',
         short: 'Refactor'
       },
+      new inquirer.Separator('── Product Management ──'),
+      {
+        name: '📝 Submit feature request',
+        value: 'feature_request',
+        short: 'Feature Request'
+      },
+      {
+        name: '📋 Manage queues & tasks',
+        value: 'queue_management',
+        short: 'Queue Management'  
+      },
+      {
+        name: '🗺️  View/update roadmap',
+        value: 'roadmap',
+        short: 'Roadmap'
+      },
+      {
+        name: '👑 Admin dashboard',
+        value: 'admin',
+        short: 'Admin'
+      },
+      new inquirer.Separator('── Development ──'),
       {
         name: '🎯 Custom agent workflow',
         value: 'custom',
@@ -271,6 +293,18 @@ export class InteractiveOrchestrator {
         break;
       case 'dashboard':
         await this.launchDashboard();
+        break;
+      case 'feature_request':
+        await this.handleFeatureRequest();
+        break;
+      case 'queue_management':
+        await this.handleQueueManagement();
+        break;
+      case 'roadmap':
+        await this.handleRoadmapManagement();
+        break;
+      case 'admin':
+        await this.handleAdminDashboard();
         break;
     }
   }
@@ -587,6 +621,179 @@ export class InteractiveOrchestrator {
     } catch (error) {
       spinner.fail('Onboarding failed');
       throw error;
+    }
+  }
+
+  private async handleFeatureRequest(): Promise<void> {
+    console.log(chalk.green('\n📝 Feature Request Submission\n'));
+    
+    const featureDetails = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'title',
+        message: 'Feature title:',
+        validate: (input: string) => input.trim().length > 0 || 'Please provide a title'
+      },
+      {
+        type: 'editor',
+        name: 'description',
+        message: 'Feature description:'
+      },
+      {
+        type: 'list',
+        name: 'priority',
+        message: 'Priority level:',
+        choices: [
+          { name: '🔴 Critical - Production issue/blocker', value: 'critical' },
+          { name: '🟠 High - Important business need', value: 'high' },
+          { name: '🟡 Medium - Nice to have soon', value: 'medium' },
+          { name: '🟢 Low - Future consideration', value: 'low' }
+        ]
+      },
+      {
+        type: 'input',
+        name: 'business_justification',
+        message: 'Business justification:'
+      },
+      {
+        type: 'input',
+        name: 'user_story',
+        message: 'User story (optional):'
+      }
+    ]);
+
+    console.log(chalk.blue('\n🤖 Processing feature request with feature-intake-agent...\n'));
+
+    // Process with feature-intake-agent
+    const result = await this.agentManager.spawnAgent('feature-intake-agent', {
+      request: featureDetails,
+      context: 'interactive_submission'
+    });
+
+    if (result.status === 'completed') {
+      console.log(chalk.green('\n✅ Feature request processed successfully!'));
+      console.log(chalk.blue(`📋 Request ID: ${result.requestId || 'FRQ-' + Date.now()}`));
+      console.log(chalk.blue(`📍 Added to: ${result.queue || 'feature-dev'} queue`));
+      console.log(chalk.blue(`⏰ Estimated delivery: ${result.eta || 'TBD'}`));
+    } else {
+      console.log(chalk.red('\n❌ Feature request processing failed'));
+      console.log(chalk.red(result.error || 'Unknown error'));
+    }
+  }
+
+  private async handleQueueManagement(): Promise<void> {
+    console.log(chalk.green('\n📋 Queue Management\n'));
+    
+    const queueAction = await inquirer.prompt([{
+      type: 'list',
+      name: 'action',
+      message: 'Queue management action:',
+      choices: [
+        { name: '📊 View queue status', value: 'status' },
+        { name: '🔄 Reassign tasks', value: 'reassign' },
+        { name: '⚡ Change task priority', value: 'priority' },
+        { name: '🚨 Emergency escalation', value: 'escalate' },
+        { name: '⚖️  Rebalance workloads', value: 'rebalance' }
+      ]
+    }]);
+
+    console.log(chalk.blue(`\n🤖 Executing ${queueAction.action} with queue-manager...\n`));
+
+    const result = await this.agentManager.spawnAgent('queue-manager', {
+      action: queueAction.action,
+      context: 'interactive_management'
+    });
+
+    if (result.status === 'completed') {
+      console.log(chalk.green('\n✅ Queue management action completed'));
+      if (result.summary) {
+        console.log(chalk.blue(result.summary));
+      }
+    } else {
+      console.log(chalk.red('\n❌ Queue management action failed'));
+      console.log(chalk.red(result.error || 'Unknown error'));
+    }
+  }
+
+  private async handleRoadmapManagement(): Promise<void> {
+    console.log(chalk.green('\n🗺️  Roadmap Management\n'));
+    
+    const roadmapAction = await inquirer.prompt([{
+      type: 'list',
+      name: 'action',
+      message: 'Roadmap action:',
+      choices: [
+        { name: '📋 View current roadmap', value: 'view' },
+        { name: '📝 Update roadmap priorities', value: 'update_priorities' },
+        { name: '🎯 Add milestone', value: 'add_milestone' },
+        { name: '📊 Review progress', value: 'review_progress' },
+        { name: '👥 Stakeholder sync', value: 'stakeholder_sync' }
+      ]
+    }]);
+
+    console.log(chalk.blue(`\n🤖 Executing roadmap ${roadmapAction.action} with roadmap-manager...\n`));
+
+    const result = await this.agentManager.spawnAgent('roadmap-manager', {
+      action: roadmapAction.action,
+      context: 'interactive_management'
+    });
+
+    if (result.status === 'completed') {
+      console.log(chalk.green('\n✅ Roadmap action completed'));
+      if (result.roadmapUpdate) {
+        console.log(chalk.blue('📋 Roadmap updated successfully'));
+      }
+    } else {
+      console.log(chalk.red('\n❌ Roadmap action failed'));
+      console.log(chalk.red(result.error || 'Unknown error'));
+    }
+  }
+
+  private async handleAdminDashboard(): Promise<void> {
+    console.log(chalk.green('\n👑 Administrative Dashboard\n'));
+    
+    const adminAction = await inquirer.prompt([{
+      type: 'list',
+      name: 'action',  
+      message: 'Administrative action:',
+      choices: [
+        { name: '📊 View full system status', value: 'system_status' },
+        { name: '📈 Generate reports', value: 'reports' },
+        { name: '🔔 Manage notifications', value: 'notifications' },
+        { name: '⚙️  System configuration', value: 'configuration' },
+        { name: '🚨 Handle escalations', value: 'escalations' },
+        { name: '👥 Stakeholder communications', value: 'stakeholder_comms' }
+      ]
+    }]);
+
+    console.log(chalk.blue(`\n🤖 Executing ${adminAction.action} with admin-dashboard-agent...\n`));
+
+    const result = await this.agentManager.spawnAgent('admin-dashboard-agent', {
+      action: adminAction.action,
+      context: 'interactive_admin'
+    });
+
+    if (result.status === 'completed') {
+      console.log(chalk.green('\n✅ Administrative action completed'));
+      
+      // Display dashboard info
+      if (result.dashboard) {
+        const dashboardBox = boxen(
+          result.dashboard,
+          {
+            padding: 1,
+            margin: 1,
+            borderStyle: 'round',
+            borderColor: 'cyan',
+            title: '👑 Admin Dashboard',
+            titleAlignment: 'center'
+          }
+        );
+        console.log(dashboardBox);
+      }
+    } else {
+      console.log(chalk.red('\n❌ Administrative action failed'));
+      console.log(chalk.red(result.error || 'Unknown error'));
     }
   }
 }

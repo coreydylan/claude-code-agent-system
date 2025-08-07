@@ -83,11 +83,14 @@ tasks:
         
         echo "🚀 Spawning agent: $AGENT_NAME"
         
-        if command -v claude-agents >/dev/null 2>&1; then
-          claude-agents spawn "$AGENT_NAME" --workspace={{.AGENT_WORKSPACE}}
+        # Check if we're in a Claude Code session
+        if command -v claude >/dev/null 2>&1; then
+          # Use Claude Code's native agent spawning
+          echo "Using $AGENT_NAME subagent to handle this task" | claude --non-interactive
         else
-          echo "⚠️  Using fallback Claude Code CLI"
-          claude --agent="$AGENT_NAME" --workspace={{.AGENT_WORKSPACE}}
+          echo "⚠️  Claude Code CLI not found. Install with:"
+          echo "   curl -fsSL https://claude.ai/install.sh | sh"
+          exit 1
         fi
 
   interactive:
@@ -96,12 +99,14 @@ tasks:
       - |
         echo "🤖 Launching interactive agent interface..."
         
-        if command -v claude-agents >/dev/null 2>&1; then
-          claude-agents interactive --workspace={{.AGENT_WORKSPACE}}
+        if command -v claude >/dev/null 2>&1; then
+          echo "🚀 Starting Claude Code with agent system ready..."
+          echo "💡 Use '/agents' command in Claude Code to manage subagents"
+          claude --interactive
         else
-          echo "⚠️  Claude Agents CLI not found"
-          echo "   Using basic Claude Code CLI"
-          claude --interactive --workspace={{.AGENT_WORKSPACE}}
+          echo "⚠️  Claude Code CLI not found. Install with:"
+          echo "   curl -fsSL https://claude.ai/install.sh | sh"
+          exit 1
         fi
 
   sequence:
@@ -117,11 +122,26 @@ tasks:
         
         echo "🎯 Running agent sequence: $SEQUENCE_NAME"
         
-        if command -v claude-agents >/dev/null 2>&1; then
-          claude-agents sequence run "$SEQUENCE_NAME" --workspace={{.AGENT_WORKSPACE}}
+        if command -v claude >/dev/null 2>&1; then
+          echo "🚀 Starting Claude Code to run $SEQUENCE_NAME sequence..."
+          echo "💡 Request the sequence by saying: 'Run the $SEQUENCE_NAME agent sequence'"
+          claude --interactive
         else
-          echo "⚠️  Claude Agents CLI not found"
-          echo "   Cannot run sequences without the CLI"
+          echo "⚠️  Claude Code CLI not found. Install with:"
+          echo "   curl -fsSL https://claude.ai/install.sh | sh"
+          exit 1
+        fi
+
+  create-agents:
+    desc: "Create Claude Code subagents"
+    cmds:
+      - |
+        echo "🤖 Creating Claude Code subagents..."
+        if [ -f "scripts/create-claude-agents.sh" ]; then
+          bash scripts/create-claude-agents.sh
+        else
+          echo "❌ Agent creation script not found"
+          echo "   Expected: scripts/create-claude-agents.sh"
           exit 1
         fi
 

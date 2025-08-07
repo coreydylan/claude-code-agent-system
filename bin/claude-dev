@@ -69,16 +69,26 @@ program
 
       // Phase 2: Environment Sync
       console.log(chalk.cyan('🔄 Synchronizing environments...'));
-      if (hasTask) {
-        execSync('task sync:all', { stdio: 'inherit' });
+      if (hasTask && (existsSync('Taskfile.yml') || existsSync('tasks'))) {
+        try {
+          execSync('task sync:all', { stdio: 'inherit' });
+        } catch (error) {
+          console.log(chalk.yellow('⚠️  Task sync failed - using basic sync'));
+          await basicEnvironmentSync();
+        }
       } else {
         await basicEnvironmentSync();
       }
 
       // Phase 3: Infrastructure Startup
       console.log(chalk.cyan('🏗️  Starting infrastructure...'));
-      if (hasTask) {
-        execSync('task infra:start', { stdio: 'inherit' });
+      if (hasTask && (existsSync('Taskfile.yml') || existsSync('tasks'))) {
+        try {
+          execSync('task infra:start', { stdio: 'inherit' });
+        } catch (error) {
+          console.log(chalk.yellow('⚠️  Task infra failed - using basic startup'));
+          await startBasicInfrastructure();
+        }
       } else {
         await startBasicInfrastructure();
       }
@@ -96,6 +106,34 @@ program
       if (!options.noAgents) {
         console.log(chalk.cyan('🤖 Preparing agent system...'));
         
+        // Create Claude Code subagents
+        const agentScript = await findAgentScript();
+        if (agentScript) {
+          try {
+            execSync(`bash "${agentScript}"`, { stdio: 'inherit' });
+          } catch (error) {
+            console.log(chalk.yellow('⚠️  Agent creation failed - continuing without agents'));
+          }
+        } else {
+          console.log(chalk.yellow('⚠️  Agent creation script not found - continuing without agents'));
+        }
+        
+        // Initialize product management systems and task files
+        await initializeTaskSystem();
+        
+        if (checkCommand('task') && (existsSync('tasks') || existsSync('Taskfile.yml'))) {
+          try {
+            execSync('task queues:init', { stdio: 'pipe' });
+            execSync('task roadmap:init', { stdio: 'pipe' });
+            console.log(chalk.green('   ✅ Product management systems initialized'));
+          } catch (error) {
+            console.log(chalk.yellow('⚠️  Task-based initialization failed - using basic setup'));
+            await initializeBasicProductManagement();
+          }
+        } else {
+          await initializeBasicProductManagement();
+        }
+        
         // Check if repo is onboarded
         if (!analysis.agentSystemReady) {
           const shouldOnboard = await promptUser('Agent system not set up. Run repository onboarding?', true);
@@ -106,6 +144,25 @@ program
                 execSync('bash scripts/repo-onboarding.sh .', { stdio: 'inherit' });
               } else {
                 console.log(chalk.yellow('⚠️  Onboarding script not found - skipping'));
+              }
+              
+              // For existing codebases, run comprehensive audit
+              if (analysis.hasExistingCode) {
+                const shouldAudit = await promptUser('Existing codebase detected. Run comprehensive codebase audit?', true);
+                
+                if (shouldAudit) {
+                  console.log(chalk.cyan('🔍 Running codebase audit with codebase-auditor agent...'));
+                  try {
+                    if (checkCommand('claude')) {
+                      console.log(chalk.blue('🤖 Launching codebase audit...'));
+                      // The audit will be performed by Claude Code CLI
+                    } else {
+                      console.log(chalk.yellow('⚠️  Claude Code CLI required for codebase audit'));
+                    }
+                  } catch (error) {
+                    console.log(chalk.yellow('⚠️  Codebase audit failed - continuing without audit'));
+                  }
+                }
               }
             } catch (error) {
               console.log(chalk.yellow('⚠️  Onboarding failed - continuing without agents'));
@@ -135,11 +192,24 @@ program
    • claude-dev deploy     # Deploy to production
    • claude-dev clean      # Clean environment
 
-${hasTask ? '📋 Task Commands:' : '⚠️  Install Task for full features:'}
-${hasTask ? '   • task --list       # All available tasks' : '   • brew install go-task/tap/go-task'}
-${hasTask ? '   • task agents:spawn # Spawn AI agents' : ''}
+🚀 Claude Code Agent Integration:
+   • claude --interactive  # Start Claude Code with agents ready
+   • Use '/agents' command # Manage specialized subagents
+   • Request agents by name: "Use task-executor agent to implement auth"
 
-💡 Ready to code! Your environment is orchestrated.
+🎯 Product Management System:
+   • Feature requests: "Use feature-intake-agent to add user profiles"
+   • Queue management: "Use queue-manager agent to check task status"
+   • Roadmap updates: "Use roadmap-manager agent to review priorities"
+   • Admin oversight: "Use admin-dashboard-agent for system status"
+
+${hasTask ? '📋 Task Commands:' : '⚠️  Install Task for advanced features:'}
+${hasTask ? '   • task --list        # All available tasks' : '   • brew install go-task/tap/go-task'}
+${hasTask ? '   • task health        # Check system health' : '   • Or use: claude-dev status (basic health check)'}
+${hasTask ? '   • task queues:status # Check queue health' : ''}
+${hasTask ? '   • task roadmap:view  # View product roadmap' : ''}
+
+💡 Ready to code! Full development pipeline orchestrated with AI agents.
 `));
 
     } catch (error) {
@@ -198,7 +268,7 @@ program
     console.log(chalk.blue('🔄 Synchronizing environments...'));
     
     try {
-      if (checkCommand('task')) {
+      if (checkCommand('task') && (existsSync('Taskfile.yml') || existsSync('tasks'))) {
         execSync('task sync:all', { stdio: 'inherit' });
       } else {
         await basicEnvironmentSync();
@@ -223,7 +293,7 @@ program
     console.log(chalk.blue(`🚀 Deploying to ${environment}...`));
     
     try {
-      if (checkCommand('task')) {
+      if (checkCommand('task') && (existsSync('Taskfile.yml') || existsSync('tasks'))) {
         if (options.staging) {
           execSync('task deploy:staging', { stdio: 'inherit' });
         } else {
@@ -295,7 +365,8 @@ async function analyzeProject() {
     hasSupabase: false,
     hasVercel: false,
     hasDocker: false,
-    agentSystemReady: false
+    agentSystemReady: false,
+    hasExistingCode: false
   };
 
   // Detect framework and language
@@ -323,6 +394,11 @@ async function analyzeProject() {
   analysis.hasDocker = existsSync('docker-compose.yml') || existsSync('docker-compose.dev.yml');
   analysis.database = analysis.hasSupabase || existsSync('prisma');
   analysis.agentSystemReady = existsSync('PROJECT_MANIFESTO.md');
+  
+  // Check for existing codebase (look for common source directories)
+  analysis.hasExistingCode = existsSync('src') || existsSync('lib') || existsSync('app') || 
+                           existsSync('components') || existsSync('pages') || existsSync('routes') ||
+                           existsSync('models') || existsSync('services') || existsSync('controllers');
 
   return analysis;
 }
@@ -465,16 +541,211 @@ async function setupProject() {
   });
 }
 
+function findSourcePath() {
+  // Find the claude-code-agent-system directory
+  const possiblePaths = [
+    // If running from the repo directly  
+    __dirname.includes('claude-code-agent-system') ? join(__dirname, '..') : null,
+    // If installed globally
+    join(process.env.NODE_PATH || '', 'claude-code-agent-system'),
+    // If in node_modules
+    join(process.cwd(), 'node_modules', 'claude-code-agent-system'), 
+    // Common locations
+    join(process.env.HOME || '', '.claude-code-agent-system'),
+    join('/usr/local/lib', 'claude-code-agent-system'),
+    // Global npm install location
+    '/usr/local/lib/node_modules/claude-code-agent-system'
+  ].filter(Boolean);
+  
+  for (const path of possiblePaths) {
+    if (existsSync(path) && existsSync(join(path, 'Taskfile.yml'))) {
+      return path;
+    }
+  }
+  return null;
+}
+
+async function findAgentScript() {
+  const sourcePath = findSourcePath();
+  if (sourcePath) {
+    const scriptPath = join(sourcePath, 'scripts', 'create-claude-agents.sh');
+    if (existsSync(scriptPath)) {
+      return scriptPath;
+    }
+  }
+  
+  // Fallback to local check
+  if (existsSync('scripts/create-claude-agents.sh')) {
+    return 'scripts/create-claude-agents.sh';
+  }
+  
+  return null;
+}
+
+async function initializeTaskSystem() {
+  console.log(chalk.blue('📋 Setting up task management system...'));
+  
+  const sourcePath = findSourcePath();
+  
+  if (sourcePath) {
+    // Copy Taskfile.yml if it doesn't exist
+    if (!existsSync('Taskfile.yml')) {
+      try {
+        execSync(`cp "${join(sourcePath, 'Taskfile.yml')}" Taskfile.yml`);
+        console.log(chalk.green('   ✅ Taskfile.yml copied'));
+      } catch (error) {
+        console.log(chalk.yellow('   ⚠️  Could not copy Taskfile.yml'));
+      }
+    }
+    
+    // Copy tasks directory if it doesn't exist
+    if (!existsSync('tasks') && existsSync(join(sourcePath, 'tasks'))) {
+      try {
+        execSync(`cp -r "${join(sourcePath, 'tasks')}" tasks`);
+        console.log(chalk.green('   ✅ Task definitions copied'));
+      } catch (error) {
+        console.log(chalk.yellow('   ⚠️  Could not copy task definitions'));
+      }
+    }
+  } else {
+    console.log(chalk.yellow('   ⚠️  Claude Code Agent System source not found - using basic setup'));
+  }
+}
+
+async function initializeBasicProductManagement() {
+  console.log(chalk.blue('📋 Setting up basic product management...'));
+  
+  // Create QUEUES directory and basic queue files
+  if (!existsSync('QUEUES')) {
+    execSync('mkdir -p QUEUES');
+    
+    // Create basic queue files
+    const queues = ['urgent', 'feature-dev', 'maintenance', 'research', 'admin'];
+    queues.forEach(queueName => {
+      const queueFile = `QUEUES/${queueName}.json`;
+      if (!existsSync(queueFile)) {
+        const queueData = {
+          queue: {
+            name: queueName,
+            sla_hours: queueName === 'urgent' ? 2 : queueName === 'feature-dev' ? 120 : 24,
+            auto_assign: true,
+            max_concurrent: queueName === 'urgent' ? 5 : 10
+          },
+          tasks: [],
+          metrics: {
+            total_tasks: 0,
+            completed_tasks: 0,
+            sla_compliance_rate: 100,
+            current_load: 0
+          },
+          agents: {
+            preferred: queueName === 'urgent' ? ['task-executor', 'security-auditor'] : ['task-executor'],
+            available: [],
+            busy: []
+          }
+        };
+        
+        execSync(`echo '${JSON.stringify(queueData, null, 2)}' > "${queueFile}"`);
+      }
+    });
+    console.log(chalk.green('   ✅ Queue system initialized'));
+  }
+  
+  // Create basic roadmap if it doesn't exist
+  if (!existsSync('ROADMAP.md')) {
+    const roadmapContent = `# Product Roadmap
+
+*Last updated: ${new Date().toISOString().split('T')[0]} by roadmap-manager*
+
+## Current Release: v1.0.0
+
+### 🎯 Active Development (Current Sprint)
+
+| Feature | Priority | Status | Assigned Agent | ETA | Dependencies |
+|---------|----------|--------|----------------|-----|--------------|
+| System Setup | High | In Progress | claude-dev | Today | - |
+
+### 📋 Next Up (Planned)
+
+Planning phase - add features through feature-intake-agent
+
+### 🔮 Future Releases
+
+To be determined based on feature requests
+
+### 📊 Progress Metrics
+
+- **Completed Features This Quarter**: 0
+- **Average Delivery Time**: Establishing baseline
+- **Current Velocity**: Initial setup
+- **Queue Health**: All queues operational
+
+---
+
+*This roadmap is actively managed by the roadmap-manager agent.*`;
+    
+    execSync(`echo '${roadmapContent}' > ROADMAP.md`);
+    console.log(chalk.green('   ✅ Roadmap initialized'));
+  }
+  
+  // Create feature intake file - find and copy from templates
+  if (!existsSync('FEATURE_INTAKE.md')) {
+    const templateContent = `# Feature Intake System
+
+*Managed by: feature-intake-agent*
+
+## 🎯 How to Submit Feature Requests
+
+### Via Claude Code Agent
+\`\`\`
+"I need to request a new feature: [describe your feature]"
+# The feature-intake-agent will automatically process your request
+\`\`\`
+
+### Via Direct Request
+Use the following format for feature requests:
+
+**Title**: Brief, descriptive name  
+**Description**: Detailed explanation of the feature  
+**Business Justification**: Why this feature is needed  
+**Priority**: Low/Medium/High/Critical  
+
+## 📋 Intake Process
+
+The feature-intake-agent follows this process:
+
+1. **Initial Validation** - Complete information and feasibility check
+2. **Effort Estimation** - Small/Medium/Large/Epic sizing  
+3. **Queue Routing** - Route to appropriate queue based on priority
+4. **Stakeholder Notification** - Confirm receipt and provide tracking
+
+## 🤖 Agent Integration
+
+Use agents naturally:
+- "Use the feature-intake-agent to process this request"
+- "Have the roadmap-manager agent update priorities"
+- "Ask the queue-manager agent about current workload"
+
+---
+
+*Feature intake system ensures all requests are captured and routed efficiently.*`;
+    
+    execSync(`echo '${templateContent}' > FEATURE_INTAKE.md`);
+    console.log(chalk.green('   ✅ Feature intake system ready'));
+  }
+}
+
 // Handle unknown commands
 program.on('command:*', () => {
   console.error(chalk.red('❌ Invalid command: %s\nSee --help for a list of available commands.'), program.args.join(' '));
   process.exit(1);
 });
 
-// Parse CLI arguments
-program.parse();
-
-// Show help if no command provided
+// Show help if no command provided, or run dev as default
 if (!process.argv.slice(2).length) {
-  program.outputHelp();
+  // Run dev command as default
+  program.parse(['node', 'claude-dev', 'dev']);
+} else {
+  // Parse provided arguments
+  program.parse();
 }

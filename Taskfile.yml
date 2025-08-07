@@ -1,0 +1,276 @@
+version: '3'
+
+includes:
+  agents: ./tasks/AgentTasks.yml
+  queues: ./tasks/QueueTasks.yml
+  roadmap: ./tasks/RoadmapTasks.yml
+
+vars:
+  PROJECT_ROOT: '{{default "." .PROJECT_ROOT}}'
+
+tasks:
+  # Main system tasks
+  sync:all:
+    desc: "Sync all environments and configurations"
+    cmds:
+      - echo "🔄 Synchronizing development environment..."
+      - task: sync:env
+      - task: sync:git
+      - echo "✅ Environment sync completed"
+
+  sync:env:
+    desc: "Sync environment files"
+    cmds:
+      - |
+        # Create .env from .env.example if it exists
+        if [ -f ".env.example" ] && [ ! -f ".env" ]; then
+          cp .env.example .env
+          echo "   ✅ Created .env from .env.example"
+        fi
+        
+        # Pull Vercel env if available
+        if command -v vercel >/dev/null 2>&1 && [ -f ".vercel/project.json" ]; then
+          vercel env pull .env.vercel 2>/dev/null && echo "   ✅ Pulled Vercel environment" || echo "   ⚠️  Could not pull Vercel environment"
+        fi
+
+  sync:git:
+    desc: "Initialize git if needed"
+    cmds:
+      - |
+        if [ ! -d ".git" ]; then
+          git init
+          echo "   ✅ Git repository initialized"
+        else
+          echo "   ✅ Git repository exists"
+        fi
+
+  infra:start:
+    desc: "Start infrastructure services"
+    cmds:
+      - echo "🚀 Starting infrastructure services..."
+      - task: infra:docker
+      - task: infra:supabase
+      - echo "✅ Infrastructure services started"
+
+  infra:docker:
+    desc: "Start Docker services"
+    cmds:
+      - |
+        if command -v docker >/dev/null 2>&1; then
+          # Determine which compose file to use
+          if [ -f "docker-compose.dev.yml" ]; then
+            COMPOSE_FILE="docker-compose.dev.yml"
+          elif [ -f "docker-compose.yml" ]; then
+            COMPOSE_FILE="docker-compose.yml"
+          else
+            echo "   ⚠️  No Docker Compose file found"
+            exit 0
+          fi
+          
+          echo "   🐳 Starting Docker services with $COMPOSE_FILE..."
+          docker-compose -f "$COMPOSE_FILE" up -d && echo "   ✅ Docker services started" || echo "   ⚠️  Docker services failed to start"
+        else
+          echo "   ⚠️  Docker not available"
+        fi
+
+  infra:supabase:
+    desc: "Start Supabase services"
+    cmds:
+      - |
+        if command -v supabase >/dev/null 2>&1 && [ -f "supabase/config.toml" ]; then
+          echo "   🗄️  Starting Supabase..."
+          supabase start && echo "   ✅ Supabase started" || echo "   ⚠️  Supabase already running or failed to start"
+        else
+          echo "   ⚠️  Supabase not available or not configured"
+        fi
+
+  deploy:
+    desc: "Deploy to production"
+    cmds:
+      - echo "🚀 Deploying to production..."
+      - task: deploy:build
+      - task: deploy:vercel
+      - echo "✅ Production deployment completed"
+
+  deploy:staging:
+    desc: "Deploy to staging"
+    cmds:
+      - echo "🚀 Deploying to staging..."
+      - task: deploy:build
+      - task: deploy:vercel-staging
+      - echo "✅ Staging deployment completed"
+
+  deploy:build:
+    desc: "Build the application"
+    cmds:
+      - |
+        if [ -f "package.json" ]; then
+          if command -v pnpm >/dev/null 2>&1 && [ -f "pnpm-lock.yaml" ]; then
+            echo "   📦 Building with pnpm..."
+            pnpm build
+          elif command -v yarn >/dev/null 2>&1 && [ -f "yarn.lock" ]; then
+            echo "   📦 Building with yarn..."
+            yarn build
+          elif command -v npm >/dev/null 2>&1; then
+            echo "   📦 Building with npm..."
+            npm run build
+          fi
+        else
+          echo "   ⚠️  No package.json found - skipping build"
+        fi
+
+  deploy:vercel:
+    desc: "Deploy to Vercel production"
+    cmds:
+      - |
+        if command -v vercel >/dev/null 2>&1; then
+          echo "   🚀 Deploying to Vercel production..."
+          vercel --prod
+        else
+          echo "   ⚠️  Vercel CLI not available"
+          echo "   Install with: npm i -g vercel"
+        fi
+
+  deploy:vercel-staging:
+    desc: "Deploy to Vercel staging"
+    cmds:
+      - |
+        if command -v vercel >/dev/null 2>&1; then
+          echo "   🚀 Deploying to Vercel staging..."
+          vercel
+        else
+          echo "   ⚠️  Vercel CLI not available"
+          echo "   Install with: npm i -g vercel"
+        fi
+
+  clean:
+    desc: "Clean development environment"
+    cmds:
+      - echo "🧹 Cleaning development environment..."
+      - task: clean:docker
+      - task: clean:temp
+      - echo "✅ Environment cleaned"
+
+  clean:docker:
+    desc: "Clean Docker containers and volumes"
+    cmds:
+      - |
+        if command -v docker >/dev/null 2>&1; then
+          # Stop and remove containers
+          if [ -f "docker-compose.dev.yml" ]; then
+            docker-compose -f docker-compose.dev.yml down
+          elif [ -f "docker-compose.yml" ]; then
+            docker-compose -f docker-compose.yml down
+          fi
+          
+          echo "   ✅ Docker containers stopped"
+        else
+          echo "   ⚠️  Docker not available"
+        fi
+
+  clean:temp:
+    desc: "Clean temporary files"
+    cmds:
+      - |
+        # Clean common temp directories
+        rm -rf .next/cache 2>/dev/null || true
+        rm -rf node_modules/.cache 2>/dev/null || true
+        rm -rf tmp/* 2>/dev/null || true
+        echo "   ✅ Temporary files cleaned"
+
+  setup:
+    desc: "Initial project setup"
+    cmds:
+      - echo "🛠️  Setting up project..."
+      - task: setup:deps
+      - task: setup:git
+      - task: setup:dirs
+      - echo "✅ Project setup completed"
+
+  setup:deps:
+    desc: "Install dependencies"
+    cmds:
+      - |
+        if [ -f "package.json" ]; then
+          if command -v pnpm >/dev/null 2>&1 && [ -f "pnpm-lock.yaml" ]; then
+            echo "   📦 Installing with pnpm..."
+            pnpm install
+          elif command -v yarn >/dev/null 2>&1 && [ -f "yarn.lock" ]; then
+            echo "   📦 Installing with yarn..."
+            yarn install
+          elif command -v npm >/dev/null 2>&1; then
+            echo "   📦 Installing with npm..."
+            npm install
+          fi
+        fi
+
+  setup:git:
+    desc: "Initialize git repository"
+    cmds:
+      - |
+        if [ ! -d ".git" ]; then
+          git init
+          echo "   ✅ Git repository initialized"
+        fi
+
+  setup:dirs:
+    desc: "Create project directories"
+    cmds:
+      - |
+        # Create common directories
+        mkdir -p logs tmp .claude TASKS QUEUES
+        echo "   ✅ Project directories created"
+
+  # Utility tasks
+  health:
+    desc: "Check system health"
+    cmds:
+      - echo "🏥 System Health Check"
+      - echo "==================="
+      - task: health:docker
+      - task: health:services
+      - task: health:queues
+
+  health:docker:
+    desc: "Check Docker health"
+    cmds:
+      - |
+        if command -v docker >/dev/null 2>&1; then
+          if docker info >/dev/null 2>&1; then
+            echo "   ✅ Docker: Running"
+          else
+            echo "   ❌ Docker: Not running"
+          fi
+        else
+          echo "   ⚠️  Docker: Not installed"
+        fi
+
+  health:services:
+    desc: "Check service health"
+    cmds:
+      - |
+        echo "🔍 Checking service health..."
+        # Check common ports
+        if curl -s http://localhost:3000 >/dev/null 2>&1; then
+          echo "   ✅ App (3000): Responding"
+        else
+          echo "   ❌ App (3000): Not responding"
+        fi
+        
+        if curl -s http://localhost:54323 >/dev/null 2>&1; then
+          echo "   ✅ Supabase Studio (54323): Responding"  
+        else
+          echo "   ❌ Supabase Studio (54323): Not responding"
+        fi
+
+  health:queues:
+    desc: "Check queue system health"
+    cmds:
+      - |
+        if [ -d "QUEUES" ]; then
+          echo "   ✅ Queue system: Active"
+          queue_count=$(ls -1 QUEUES/*.json 2>/dev/null | wc -l | tr -d ' ')
+          echo "   📊 Active queues: $queue_count"
+        else
+          echo "   ⚠️  Queue system: Not initialized"
+        fi

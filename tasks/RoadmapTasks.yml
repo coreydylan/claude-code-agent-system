@@ -1,0 +1,366 @@
+# Roadmap Management Tasks  
+# Integration with roadmap-manager agent
+
+version: '3'
+
+vars:
+  ROADMAP_FILE: '{{default "./ROADMAP.md" .ROADMAP_FILE}}'
+  ROADMAP_AGENT: 'roadmap-manager'
+  STAKEHOLDER_AGENT: 'stakeholder-interface'
+
+tasks:
+  # 📋 Roadmap Viewing
+  view:
+    desc: "View current roadmap"
+    cmds:
+      - |
+        if [ -f "{{.ROADMAP_FILE}}" ]; then
+          echo "🗺️  Current Product Roadmap"
+          echo "=========================="
+          cat "{{.ROADMAP_FILE}}"
+        else
+          echo "⚠️  Roadmap not found. Initializing..."
+          task roadmap:init
+        fi
+
+  status:
+    desc: "Show roadmap progress summary"
+    cmds:
+      - |
+        echo "📊 Roadmap Status Summary"
+        echo "========================"
+        
+        if [ -f "{{.ROADMAP_FILE}}" ]; then
+          # Extract key metrics from roadmap
+          echo "📈 Progress Overview:"
+          
+          # Count active features
+          active=$(grep -c "In Progress" "{{.ROADMAP_FILE}}" 2>/dev/null || echo "0")
+          planned=$(grep -c "Planned" "{{.ROADMAP_FILE}}" 2>/dev/null || echo "0")
+          completed=$(grep -c "✅" "{{.ROADMAP_FILE}}" 2>/dev/null || echo "0")
+          
+          echo "   • Active Features: $active"  
+          echo "   • Planned Features: $planned"
+          echo "   • Completed This Quarter: $completed"
+          
+          # Show current priorities
+          echo ""
+          echo "🎯 Current Priorities:"
+          grep -A 5 "Active Development" "{{.ROADMAP_FILE}}" | grep -E "^\|.*\|" | head -6 | tail -5 | while read -r line; do
+            echo "   $line"
+          done 2>/dev/null || echo "   No active development items found"
+          
+        else
+          echo "⚠️  Roadmap file not found"
+        fi
+
+  # 📝 Roadmap Management  
+  update:
+    desc: "Update roadmap priorities and timeline"
+    cmds:
+      - |
+        echo "📝 Updating roadmap..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "🤖 Using roadmap-manager agent to update roadmap priorities and timeline"
+          echo "Use the roadmap-manager agent to review and update the current roadmap" | claude --non-interactive
+        else
+          echo "⚠️  Roadmap updates require Claude Code CLI"
+          echo "   Manual editing available at: {{.ROADMAP_FILE}}"
+        fi
+
+  add-milestone:
+    desc: "Add milestone to roadmap"
+    cmds:
+      - |
+        MILESTONE="{{.CLI_ARGS}}"
+        if [ -z "$MILESTONE" ]; then
+          echo "❌ Please specify milestone details"
+          echo "Usage: task roadmap:add-milestone -- 'Q2 2024: Mobile App Release'"
+          exit 1
+        fi
+        
+        echo "🎯 Adding milestone: $MILESTONE"
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the roadmap-manager agent to add milestone: $MILESTONE" | claude --non-interactive
+        else
+          echo "⚠️  Milestone management requires Claude Code CLI"
+        fi
+
+  review:
+    desc: "Review roadmap progress and adjust priorities"
+    cmds:
+      - |
+        echo "🔍 Reviewing roadmap progress..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "🤖 Using roadmap-manager agent for comprehensive roadmap review"
+          echo "Use the roadmap-manager agent to conduct a full roadmap review and suggest priority adjustments" | claude --non-interactive
+        else
+          echo "⚠️  Roadmap review requires Claude Code CLI"
+          echo "   Current status available via: task roadmap:status"
+        fi
+
+  # 👥 Stakeholder Management
+  stakeholder-sync:
+    desc: "Sync with stakeholders on roadmap changes"
+    cmds:
+      - |
+        echo "👥 Stakeholder synchronization..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "🤖 Using stakeholder-interface agent for roadmap sync"
+          echo "Use the stakeholder-interface agent to sync roadmap changes with stakeholders and collect feedback" | claude --non-interactive
+        else
+          echo "⚠️  Stakeholder sync requires Claude Code CLI"
+        fi
+
+  feedback:
+    desc: "Collect and process stakeholder feedback"
+    cmds:
+      - |
+        FEEDBACK="{{.CLI_ARGS}}"
+        echo "💬 Processing stakeholder feedback..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          if [ -n "$FEEDBACK" ]; then
+            echo "Use the stakeholder-interface agent to process this feedback: $FEEDBACK" | claude --non-interactive
+          else
+            echo "Use the stakeholder-interface agent to collect and process stakeholder feedback on the current roadmap" | claude --non-interactive
+          fi
+        else
+          echo "⚠️  Feedback processing requires Claude Code CLI"
+        fi
+
+  # 📊 Analysis and Reporting
+  metrics:
+    desc: "Generate roadmap metrics and analysis"
+    cmds:
+      - |
+        echo "📊 Roadmap Metrics Analysis"
+        echo "=========================="
+        
+        if [ -f "{{.ROADMAP_FILE}}" ]; then
+          # Velocity analysis
+          echo "🚀 Delivery Velocity:"
+          completed_features=$(grep -c "✅" "{{.ROADMAP_FILE}}" 2>/dev/null || echo "0")
+          echo "   • Features Completed This Quarter: $completed_features"
+          
+          # Timeline analysis
+          echo ""
+          echo "⏰ Timeline Analysis:"
+          current_date=$(date +%Y-%m-%d)
+          echo "   • Current Date: $current_date"
+          
+          # Risk analysis  
+          echo ""
+          echo "🚨 Risk Indicators:"
+          blocked_count=$(grep -c "🔴.*Blocked" "{{.ROADMAP_FILE}}" 2>/dev/null || echo "0")
+          at_risk_count=$(grep -c "🟡.*At Risk" "{{.ROADMAP_FILE}}" 2>/dev/null || echo "0")
+          
+          echo "   • Blocked Items: $blocked_count"
+          echo "   • At Risk Items: $at_risk_count"
+          
+          if [ "$blocked_count" -gt 0 ] || [ "$at_risk_count" -gt 0 ]; then
+            echo "   ⚠️  Attention needed for blocked/at-risk items"
+          else
+            echo "   ✅ All items on track"
+          fi
+          
+        else
+          echo "⚠️  Roadmap file not found"
+        fi
+
+  report:
+    desc: "Generate detailed roadmap report"
+    cmds:
+      - |
+        REPORT_TYPE="{{.CLI_ARGS}}"
+        if [ -z "$REPORT_TYPE" ]; then
+          REPORT_TYPE="weekly"
+        fi
+        
+        echo "📈 Generating $REPORT_TYPE roadmap report..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the roadmap-manager agent to generate a comprehensive $REPORT_TYPE roadmap report with progress analysis" | claude --non-interactive
+        else
+          echo "⚠️  Report generation requires Claude Code CLI"
+          echo "   Basic metrics available via: task roadmap:metrics"
+        fi
+
+  # 🔄 Integration  
+  sync-queues:
+    desc: "Synchronize roadmap with task queues"
+    cmds:
+      - |
+        echo "🔄 Synchronizing roadmap with task queues..."
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the roadmap-manager agent to sync the roadmap with current task queue contents and priorities" | claude --non-interactive
+        else
+          echo "⚠️  Queue synchronization requires Claude Code CLI"
+        fi
+
+  plan-release:
+    desc: "Plan release based on roadmap progress"
+    cmds:
+      - |
+        RELEASE_VERSION="{{.CLI_ARGS}}"
+        if [ -z "$RELEASE_VERSION" ]; then
+          echo "❌ Please specify release version"
+          echo "Usage: task roadmap:plan-release -- v1.2.0"
+          exit 1
+        fi
+        
+        echo "🚀 Planning release: $RELEASE_VERSION"
+        
+        if command -v claude >/dev/null 2>&1; then
+          echo "Use the roadmap-manager agent to plan release $RELEASE_VERSION based on current roadmap progress" | claude --non-interactive
+        else
+          echo "⚠️  Release planning requires Claude Code CLI"
+        fi
+
+  # 🏥 Health and Validation
+  validate:
+    desc: "Validate roadmap consistency and feasibility"
+    cmds:
+      - |
+        echo "🏥 Validating roadmap..."
+        
+        if [ -f "{{.ROADMAP_FILE}}" ]; then
+          echo "✅ Roadmap file exists"
+          
+          # Check for required sections
+          sections=("Active Development" "Next Up" "Future Releases" "Progress Metrics")
+          missing_sections=""
+          
+          for section in "${sections[@]}"; do
+            if ! grep -q "$section" "{{.ROADMAP_FILE}}"; then
+              missing_sections="$missing_sections $section"
+            fi
+          done
+          
+          if [ -n "$missing_sections" ]; then
+            echo "⚠️  Missing sections:$missing_sections"
+          else
+            echo "✅ All required sections present"
+          fi
+          
+          # Check for dates
+          if grep -q "ETA" "{{.ROADMAP_FILE}}"; then
+            echo "✅ Delivery estimates present"  
+          else
+            echo "⚠️  No delivery estimates found"
+          fi
+          
+        else
+          echo "❌ Roadmap file not found"
+          echo "   Run: task roadmap:init"
+        fi
+
+  # 🚀 Setup and Maintenance
+  init:
+    desc: "Initialize roadmap from template"
+    cmds:
+      - |
+        echo "🚀 Initializing roadmap..."
+        
+        if [ ! -f "{{.ROADMAP_FILE}}" ]; then
+          if [ -f "templates/ROADMAP.md" ]; then
+            # Copy template and replace placeholders
+            cp templates/ROADMAP.md "{{.ROADMAP_FILE}}"
+            
+            # Replace template variables
+            current_date=$(date +%Y-%m-%d)
+            current_version="1.0.0"
+            
+            # Use sed to replace placeholders (macOS compatible)
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+              sed -i '' "s/{{DATE}}/$current_date/g" "{{.ROADMAP_FILE}}"
+              sed -i '' "s/{{AGENT}}/roadmap-manager/g" "{{.ROADMAP_FILE}}"
+              sed -i '' "s/{{VERSION}}/$current_version/g" "{{.ROADMAP_FILE}}"
+            else
+              sed -i "s/{{DATE}}/$current_date/g" "{{.ROADMAP_FILE}}"
+              sed -i "s/{{AGENT}}/roadmap-manager/g" "{{.ROADMAP_FILE}}"
+              sed -i "s/{{VERSION}}/$current_version/g" "{{.ROADMAP_FILE}}"
+            fi
+            
+            echo "✅ Roadmap initialized from template"
+          else
+            echo "❌ Roadmap template not found"
+            echo "Creating basic roadmap structure..."
+            
+            cat > "{{.ROADMAP_FILE}}" << EOF
+# Product Roadmap
+
+*Last updated: $(date +%Y-%m-%d) by roadmap-manager*
+
+## Current Release: v1.0.0
+
+### 🎯 Active Development (Current Sprint)
+
+| Feature | Priority | Status | Assigned Agent | ETA | Dependencies |
+|---------|----------|--------|----------------|-----|--------------|
+| Initial setup | High | In Progress | roadmap-manager | $(date -d '+1 week' +%Y-%m-%d) | - |
+
+### 📋 Next Up (Planned)
+
+No features planned yet.
+
+### 🔮 Future Releases
+
+Planning in progress...
+
+### 📊 Progress Metrics
+
+- **Completed Features This Quarter**: 0
+- **Average Delivery Time**: N/A  
+- **Current Velocity**: Establishing baseline
+- **Queue Health**: All queues operational
+
+---
+
+*This roadmap is actively managed by the roadmap-manager agent.*
+EOF
+            
+            echo "✅ Basic roadmap structure created"
+          fi
+        else
+          echo "⚠️  Roadmap already exists: {{.ROADMAP_FILE}}"
+        fi
+
+  backup:
+    desc: "Backup current roadmap"
+    cmds:
+      - |
+        if [ -f "{{.ROADMAP_FILE}}" ]; then
+          backup_file="{{.ROADMAP_FILE}}.backup.$(date +%Y%m%d-%H%M%S)"
+          cp "{{.ROADMAP_FILE}}" "$backup_file"
+          echo "✅ Roadmap backed up to: $backup_file"
+        else
+          echo "⚠️  No roadmap to backup"
+        fi
+
+  restore:
+    desc: "Restore roadmap from backup"  
+    cmds:
+      - |
+        BACKUP_FILE="{{.CLI_ARGS}}"
+        if [ -z "$BACKUP_FILE" ]; then
+          echo "❌ Please specify backup file"
+          echo "Usage: task roadmap:restore -- ROADMAP.md.backup.20240101-120000"
+          
+          echo ""
+          echo "Available backups:"
+          ls -la {{.ROADMAP_FILE}}.backup.* 2>/dev/null || echo "   No backups found"
+          exit 1
+        fi
+        
+        if [ -f "$BACKUP_FILE" ]; then
+          cp "$BACKUP_FILE" "{{.ROADMAP_FILE}}"
+          echo "✅ Roadmap restored from: $BACKUP_FILE"
+        else
+          echo "❌ Backup file not found: $BACKUP_FILE"
+        fi
